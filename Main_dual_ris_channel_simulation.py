@@ -6,8 +6,6 @@ import numpy as np
 from relay_sim.channel import (
     Aperture_Width_MS,
     Far_Field_Distance_M,
-    Lambda,
-    MS2_Local_Angle_Sign,
     Separation_Distance_M,
     build_far_field_channel,
     plot_channel_at_test_angle,
@@ -16,6 +14,7 @@ from relay_sim.link_budget import Base_Power_dBm, Noise_Power_dBm, plot_link_res
 from relay_sim.metasurface import (
     Columns,
     Element_Field_Exponent,
+    Lambda,
     Period_MS,
     Compensation_Phasors,
     Compensation_Phase_States_Rad,
@@ -61,12 +60,12 @@ def main() -> None:
         h12, a1, a2, alpha = build_far_field_channel(angle_rad)
 
         # 已知角度方案：按“理想补偿相位→归一化→2-bit量化”的顺序计算两块板的16列编码。
-        ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1 = (
-            calculate_2bit_compensation_code(angle_deg, Lambda)
-        )
-        ideal_compensation_phase2, quantized_compensation_phase2, Known_Angle_Matrix_MS2 = calculate_2bit_compensation_code(
-            MS2_Local_Angle_Sign * angle_deg, Lambda
-        )
+        ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1 = calculate_2bit_compensation_code(angle_deg)
+
+        # 两块MS的列编号和直流偏置设计一致，因此已知角度时直接使用相同编码矩阵。
+        ideal_compensation_phase2 = ideal_compensation_phase1.copy()
+        quantized_compensation_phase2 = quantized_compensation_phase1.copy()
+        Known_Angle_Matrix_MS2 = Known_Angle_Matrix_MS1.copy()
         Known_Angle_v1 = Compensation_Phasors[Known_Angle_Matrix_MS1]
         Known_Angle_v2 = Compensation_Phasors[Known_Angle_Matrix_MS2]
 
@@ -205,7 +204,7 @@ def main() -> None:
     plot_link_results(results)
     plot_channel_at_test_angle(test_h12, test_angle_deg)
     plot_ce_coding_matrices(angles_deg, np.asarray(CE_Optimal_Matrices_MS1), np.asarray(CE_Optimal_Matrices_MS2))
-    plot_patterns(test_data, Lambda)
+    plot_patterns(test_data)
 
     # CE是主程序核心，因此最后一张CE概率图也直接在main()中绘制。
     figure, axes = plt.subplots(1, 2, figsize=(8.4, 3.2))

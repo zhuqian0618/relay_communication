@@ -3,29 +3,21 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .metasurface import Column_Positions_MS, Columns, Period_MS
+from .metasurface import Beta0, Column_Positions_MS, Columns, Lambda, Period_MS
 
 # 本文件只保存信道自身需要的参数，不再建立集中式config类。
-Speed_Of_Light_M_S = 299_792_458.0
-Carrier_Frequency_Hz = 5.8e9
-Lambda = Speed_Of_Light_M_S / Carrier_Frequency_Hz
 Separation_Distance_M = 6.5
 
 # 两块阵面的最大尺寸为16×25 mm；Fraunhofer距离用于检查10 m是否满足远场条件。
 Aperture_Width_MS = Columns * Period_MS
 Far_Field_Distance_M = 2 * Aperture_Width_MS**2 / Lambda
 
-# 从两块超表面各自的辐射面观察时，列编号一致，因此相同编码指向相同本地方位。
-MS2_Local_Angle_Sign = 1.0
-
-
 def build_far_field_channel(angle_rad: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, complex]:
     """构造H12=alpha*a2*a1^H，并同时返回两端阵列响应和Friis复系数。"""
 
     # 按MATLAB相位公式显式计算每一列的空间相位β0*xn*sin(θ)。
-    Beta0 = 2 * np.pi / Lambda
     Phase1_Rad = Beta0 * Column_Positions_MS * np.sin(angle_rad)
-    Phase2_Rad = Beta0 * Column_Positions_MS * np.sin(MS2_Local_Angle_Sign * angle_rad)
+    Phase2_Rad = Beta0 * Column_Positions_MS * np.sin(angle_rad)
 
     # 采用e^(jωt)约定，导向矢量使用负指数；列号一致时两块板在同一角度具有相同响应。
     a1 = np.exp(-1j * Phase1_Rad)

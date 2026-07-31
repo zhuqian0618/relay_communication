@@ -3,6 +3,12 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+# 超表面工作频率为5.8 GHz；波长和自由空间相位常数在本模块统一定义，其他模块直接引用。
+Speed_Of_Light_M_S = 299_792_458.0
+Carrier_Frequency_Hz = 5.8e9
+Lambda = Speed_Of_Light_M_S / Carrier_Frequency_Hz
+Beta0 = 2 * np.pi / Lambda
+
 # 每块超表面由2行、16列物理单元组成；同一列的两个单元使用相同补偿相位。
 Rows, Columns = 2, 16
 
@@ -24,11 +30,10 @@ Pattern_Angles_Deg = np.arange(-90.0, 90.01, 0.1)
 Pattern_Floor_dB = -50.0
 
 
-def calculate_2bit_compensation_code(Target_Angle_Deg: float, Lambda: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def calculate_2bit_compensation_code(Target_Angle_Deg: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """给定偏折角，依次计算16列理想补偿相位、2-bit补偿相位和编码矩阵。"""
 
-    # 自由空间相位常数β0=2π/λ；目标角度先由度转换为弧度。
-    Beta0 = 2 * np.pi / Lambda
+    # 目标角度由度转换为弧度；Beta0已根据5.8 GHz工作频率在文件开头计算。
     Target_Angle_Rad = np.deg2rad(Target_Angle_Deg)
 
     # 采用e^(jωt)约定，第n列抵消空间相位所需的理想补偿相位为φn=-β0*xn*sin(θ0)。
@@ -45,7 +50,7 @@ def calculate_2bit_compensation_code(Target_Angle_Deg: float, Lambda: float) -> 
     return Ideal_Compensation_Phase_Rad, Quantized_Compensation_Phase_Rad, Coding_Matrix
 
 
-def direction_pattern_dB(Coding_Matrix: np.ndarray, Lambda: float) -> np.ndarray:
+def direction_pattern_dB(Coding_Matrix: np.ndarray) -> np.ndarray:
     """按照叠加定理逐单元累加远场，并以理想0°波束为0 dB参考。"""
 
     # 同一列两行使用相同量化补偿相位；该矩阵与实际2×16直流偏置分布对应。
@@ -53,7 +58,6 @@ def direction_pattern_dB(Coding_Matrix: np.ndarray, Lambda: float) -> np.ndarray
     Compensation_Phase_Matrix_Rad = np.tile(Quantized_Compensation_Phase_Rad, (Rows, 1))
 
     # 在-90°至90°逐角度计算远场；Fields保存每个方向的复电场。
-    Beta0 = 2 * np.pi / Lambda
     Fields = np.zeros(Pattern_Angles_Deg.size, dtype=complex)
 
     # 逐个观察角、逐行、逐列累加exp[j(空间传播相位+补偿相位)]，直接体现叠加定理。
@@ -94,14 +98,14 @@ def plot_ce_coding_matrices(angles_deg: np.ndarray, CE_Optimal_Matrices_MS1: np.
     figure.tight_layout()
 
 
-def plot_patterns(test_data: dict, Lambda: float) -> None:
+def plot_patterns(test_data: dict) -> None:
     """绘制测试角度下的两端方向图和CE最终2×16补偿相位热力图。"""
 
     # 分别计算测试角度下已知角度码本与盲CE码本的方向图。
-    MS1_Known_Pattern = direction_pattern_dB(test_data["Known_Angle_Matrix_MS1"], Lambda)
-    MS2_Known_Pattern = direction_pattern_dB(test_data["Known_Angle_Matrix_MS2"], Lambda)
-    MS1_CE_Pattern = direction_pattern_dB(test_data["CE_Optimal_Matrix_MS1"], Lambda)
-    MS2_CE_Pattern = direction_pattern_dB(test_data["CE_Optimal_Matrix_MS2"], Lambda)
+    MS1_Known_Pattern = direction_pattern_dB(test_data["Known_Angle_Matrix_MS1"])
+    MS2_Known_Pattern = direction_pattern_dB(test_data["Known_Angle_Matrix_MS2"])
+    MS1_CE_Pattern = direction_pattern_dB(test_data["CE_Optimal_Matrix_MS1"])
+    MS2_CE_Pattern = direction_pattern_dB(test_data["CE_Optimal_Matrix_MS2"])
 
     figure, axes = plt.subplots(2, 2, figsize=(8.6, 5.6), gridspec_kw={"height_ratios": [1.0, 0.55]})
 
