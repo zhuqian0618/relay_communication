@@ -15,7 +15,7 @@ from relay_sim.channel import (
 from relay_sim.link_budget import Base_Power_dBm, Noise_Power_dBm, plot_link_results, received_power_dBm
 from relay_sim.metasurface import (
     Columns,
-    Element_Pattern_Exponent,
+    Element_Field_Exponent,
     Period_MS,
     Compensation_Phasors,
     Compensation_Phase_States_Rad,
@@ -30,7 +30,7 @@ def main() -> None:
 
     # ---------- 1. 实验扫描参数：只在本主程序中使用 ----------
     angles_deg = np.arange(-45.0, 45.01, 5.0)
-    diagnostic_angle_deg = -5.0
+    diagnostic_angle_deg = -30.0
 
     # ---------- 2. CE参数：算法是本文件核心，因此不再放入其他模块 ----------
     population_size = 72
@@ -103,7 +103,8 @@ def main() -> None:
             beam_matching = np.clip(np.abs(h_eff) ** 2 / ideal_power, 1e-5, 1.0)
 
             # 先计算无随机测量误差的理论功率，再叠加频谱仪读数误差供CE使用。
-            scan_product = np.cos(angle_rad) ** (2 * Element_Pattern_Exponent)
+            # Tian等公式(4)把cos(theta)^0.8定义为单元场方向图；两端均取模平方后，总功率因子为cos(theta)^(4*0.8)。
+            scan_product = np.cos(angle_rad) ** (4 * Element_Field_Exponent)
             theoretical_scores = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * beam_matching * scan_product)
             measured_scores = theoretical_scores + rng.normal(0.0, measurement_noise_std_dB, population_size)
 

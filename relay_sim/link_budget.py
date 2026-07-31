@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from .channel import Separation_Distance_M
-from .metasurface import Columns, Element_Pattern_Exponent
+from .metasurface import Columns, Element_Field_Exponent
 
 # 本文件只保存链路预算所需参数；dB量在计算时直接转成线性值，不再调用单位转换函数。
 Transmit_Power_dBm = -10.0
@@ -31,8 +31,9 @@ def received_power_dBm(v1: np.ndarray, v2: np.ndarray, angle_rad: float,
     ideal_power = np.abs(alpha) ** 2 * Columns**4
     beam_matching = np.clip(np.abs(h_eff) ** 2 / ideal_power, 1e-5, 1.0)
 
-    # 只考虑-90°至90°，两端均偏转angle时，扫描功率系数为cos(theta)^(2q)。
-    scan_product = np.cos(angle_rad) ** (2 * Element_Pattern_Exponent)
+    # 只考虑-90°至90°。每块超表面的场因子为cos(theta)^q，转换成功率后为cos(theta)^(2q)；
+    # 收发两块超表面的功率因子相乘，因此双端链路总扫描因子为cos(theta)^(4q)。
+    scan_product = np.cos(angle_rad) ** (4 * Element_Field_Exponent)
 
     # dB增益直接相加等价于线性增益相乘；最后仍以dBm输出。
     return float(Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * beam_matching * scan_product))

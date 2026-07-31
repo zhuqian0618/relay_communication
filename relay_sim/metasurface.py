@@ -16,8 +16,8 @@ Column_Positions_MS = (np.arange(Columns) - (Columns - 1) / 2) * Period_MS
 Compensation_Phase_States_Rad = np.deg2rad([0.0, 90.0, 180.0, 270.0])
 Compensation_Phasors = np.exp(1j * Compensation_Phase_States_Rad)
 
-# 当前用cos(theta)^q近似“功率”方向图，因此q=1表示功率近似cos(theta)。
-Element_Pattern_Exponent = 0.8
+# 按Tian等公式(4)，用cos(theta)^q近似单元远场“场幅度”；本文取q=0.8。
+Element_Field_Exponent = 0.8
 
 # 方向图只显示水平面，绘制范围为-90°至90°。
 Pattern_Angles_Deg = np.arange(-90.0, 90.01, 0.1)
@@ -64,9 +64,11 @@ def direction_pattern_dB(Code_Indices: np.ndarray, Lambda: float) -> np.ndarray:
                 Compensation_Phase = Compensation_Phase_Matrix_Rad[Row_Index, Column_Index]
                 Fields[Angle_Index] += np.exp(1j * (Compensation_Phase + Space_Phase_Rad))
 
-    # 只计算-90°至90°前向空间，该范围内cos(θ)非负，单元功率方向图直接取cos(θ)^q。
-    Element_Power = np.cos(np.deg2rad(Pattern_Angles_Deg)) ** Element_Pattern_Exponent
-    Relative_Power = np.abs(Fields) ** 2 / (Rows * Columns) ** 2 * Element_Power
+    # 只计算-90°至90°前向空间，该范围内cos(θ)非负；先将单元场方向图乘到阵列复电场上。
+    # 随后取模平方，因此单块超表面的单元功率因子自然成为cos(theta)^(2q)=cos(theta)^1.6。
+    Element_Field = np.cos(np.deg2rad(Pattern_Angles_Deg)) ** Element_Field_Exponent
+    Total_Fields = Fields * Element_Field
+    Relative_Power = np.abs(Total_Fields) ** 2 / (Rows * Columns) ** 2
     return np.maximum(10 * np.log10(np.maximum(Relative_Power, 1e-300)), Pattern_Floor_dB)
 
 
