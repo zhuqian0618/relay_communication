@@ -1,4 +1,4 @@
-"""按照MATLAB阵列叠加思路计算2-bit列控超表面的补偿相位编码和远场方向图。"""
+"""计算2-bit列控超表面的补偿相位编码，按照叠加定理计算远场方向图。"""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,8 +9,7 @@ Rows, Columns = 2, 16
 # 单元周期固定为25 mm，既是单元尺寸，也是相邻受控列的中心间距。
 Period_MS = 25e-3
 
-# 以阵面中心为坐标原点，建立2行和16列物理单元的中心坐标。
-Row_Positions_MS = (np.arange(Rows) - (Rows - 1) / 2) * Period_MS
+# 以阵面中心为坐标原点，建立16列物理单元的中心坐标。
 Column_Positions_MS = (np.arange(Columns) - (Columns - 1) / 2) * Period_MS
 
 # 2-bit补偿相位共有四种状态；复数形式依次为1、j、-1、-j。
