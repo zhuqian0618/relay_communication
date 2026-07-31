@@ -7,7 +7,7 @@ from relay_sim.channel import (
     Aperture_Width_MS,
     Far_Field_Distance_M,
     Lambda,
-    Ris2_Local_Angle_Sign,
+    MS2_Local_Angle_Sign,
     Separation_Distance_M,
     build_far_field_channel,
     plot_channel_at_test_angle,
@@ -20,7 +20,7 @@ from relay_sim.metasurface import (
     Compensation_Phasors,
     Compensation_Phase_States_Rad,
     calculate_2bit_compensation_code,
-    plot_codebooks,
+    plot_ce_coding_matrices,
     plot_patterns,
 )
 
@@ -43,15 +43,15 @@ def main() -> None:
     convergence_probability = 0.985
     rng = np.random.default_rng(20260724)
 
-    # 两块RIS各有16列、每列4种状态，所以联合概率矩阵大小为32×4。
+    # 两块MS各有16列、每列4种状态，所以联合概率矩阵大小为32×4。
     variable_count, state_count = 2 * Columns, Compensation_Phase_States_Rad.size
 
-    # 第一列补偿相位固定为0°，可以消除每块RIS公共补偿相位不唯一的问题。
+    # 第一列补偿相位固定为0°，可以消除每块MS公共补偿相位不唯一的问题。
     fixed_variables = (0, Columns)
 
     # ---------- 3. 为角度扫描结果分配列表 ----------
     power_known_dBm, power_ce_dBm = [], []
-    geometric_codes1, geometric_codes2 = [], []
+    CE_Optimal_Matrices_MS1, CE_Optimal_Matrices_MS2 = [], []
     test_data = None
     test_h12 = None
 
@@ -61,14 +61,14 @@ def main() -> None:
         h12, a1, a2, alpha = build_far_field_channel(angle_rad)
 
         # 已知角度方案：按“理想补偿相位→归一化→2-bit量化”的顺序计算两块板的16列编码。
-        ideal_compensation_phase1, quantized_compensation_phase1, geometric_indices1 = (
+        ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1 = (
             calculate_2bit_compensation_code(angle_deg, Lambda)
         )
-        ideal_compensation_phase2, quantized_compensation_phase2, geometric_indices2 = calculate_2bit_compensation_code(
-            Ris2_Local_Angle_Sign * angle_deg, Lambda
+        ideal_compensation_phase2, quantized_compensation_phase2, Known_Angle_Matrix_MS2 = calculate_2bit_compensation_code(
+            MS2_Local_Angle_Sign * angle_deg, Lambda
         )
-        geometric_v1 = Compensation_Phasors[geometric_indices1]
-        geometric_v2 = Compensation_Phasors[geometric_indices2]
+        Known_Angle_v1 = Compensation_Phasors[Known_Angle_Matrix_MS1]
+        Known_Angle_v2 = Compensation_Phasors[Known_Angle_Matrix_MS2]
 
         # ---------- 5. 未知CSI盲CE：从均匀概率开始 ----------
         probability = np.full((variable_count, state_count), 1 / state_count)
@@ -93,7 +93,7 @@ def main() -> None:
             samples[1] = np.argmax(probability, axis=1)
             samples[:, fixed_variables] = 0
 
-            # 将每组32维状态拆成RIS1和RIS2各16列的复补偿相位向量。
+            # 将每组32维状态拆成MS1和MS2各16列的复补偿相位向量。
             v1_batch = Compensation_Phasors[samples[:, :Columns]]
             v2_batch = Compensation_Phasors[samples[:, Columns:]]
 
@@ -153,29 +153,29 @@ def main() -> None:
 
         # 选择重复测量均值更高的最终码本。
         best_indices = final_candidates[int(np.argmax(final_means / final_verification_repeats))]
-        ce_indices1, ce_indices2 = best_indices[:Columns], best_indices[Columns:]
-        ce_v1 = Compensation_Phasors[ce_indices1]
-        ce_v2 = Compensation_Phasors[ce_indices2]
+        CE_Optimal_Matrix_MS1, CE_Optimal_Matrix_MS2 = best_indices[:Columns], best_indices[Columns:]
+        CE_v1 = Compensation_Phasors[CE_Optimal_Matrix_MS1]
+        CE_v2 = Compensation_Phasors[CE_Optimal_Matrix_MS2]
 
         # ---------- 8. 用统一链路预算计算两种方案的最终理论接收功率 ----------
-        power_known_dBm.append(received_power_dBm(geometric_v1, geometric_v2, angle_rad, h12, alpha))
-        power_ce_dBm.append(received_power_dBm(ce_v1, ce_v2, angle_rad, h12, alpha))
-        geometric_codes1.append(geometric_indices1)
-        geometric_codes2.append(geometric_indices2)
+        power_known_dBm.append(received_power_dBm(Known_Angle_v1, Known_Angle_v2, angle_rad, h12, alpha))
+        power_ce_dBm.append(received_power_dBm(CE_v1, CE_v2, angle_rad, h12, alpha))
+        CE_Optimal_Matrices_MS1.append(CE_Optimal_Matrix_MS1.copy())
+        CE_Optimal_Matrices_MS2.append(CE_Optimal_Matrix_MS2.copy())
 
         # 保存测试角度的信道、码本与CE过程，供后续三张图使用。
         if np.isclose(angle_deg, test_angle_deg):
             test_h12 = h12.copy()
             test_data = {
                 "angle_deg": float(angle_deg),
-                "geometric_indices1": geometric_indices1.copy(),
-                "geometric_indices2": geometric_indices2.copy(),
+                "Known_Angle_Matrix_MS1": Known_Angle_Matrix_MS1.copy(),
+                "Known_Angle_Matrix_MS2": Known_Angle_Matrix_MS2.copy(),
                 "ideal_compensation_phase1": ideal_compensation_phase1.copy(),
                 "ideal_compensation_phase2": ideal_compensation_phase2.copy(),
                 "quantized_compensation_phase1": quantized_compensation_phase1.copy(),
                 "quantized_compensation_phase2": quantized_compensation_phase2.copy(),
-                "ce_indices1": ce_indices1.copy(),
-                "ce_indices2": ce_indices2.copy(),
+                "CE_Optimal_Matrix_MS1": CE_Optimal_Matrix_MS1.copy(),
+                "CE_Optimal_Matrix_MS2": CE_Optimal_Matrix_MS2.copy(),
                 "measured_history_dBm": np.asarray(measured_history),
                 "confidence_history": np.asarray(confidence_history),
                 "final_probability": probability.copy(),
@@ -204,7 +204,7 @@ def main() -> None:
     plt.rcParams.update({"figure.dpi": 100, "axes.grid": True, "grid.alpha": 0.25, "font.size": 10})
     plot_link_results(results)
     plot_channel_at_test_angle(test_h12, test_angle_deg)
-    plot_codebooks(angles_deg, np.asarray(geometric_codes1), np.asarray(geometric_codes2))
+    plot_ce_coding_matrices(angles_deg, np.asarray(CE_Optimal_Matrices_MS1), np.asarray(CE_Optimal_Matrices_MS2))
     plot_patterns(test_data, Lambda)
 
     # CE是主程序核心，因此最后一张CE概率图也直接在main()中绘制。

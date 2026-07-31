@@ -25,7 +25,7 @@ Pattern_Floor_dB = -50.0
 
 
 def calculate_2bit_compensation_code(Target_Angle_Deg: float, Lambda: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """给定偏折角，依次计算16列理想补偿相位、2-bit补偿相位和编码编号。"""
+    """给定偏折角，依次计算16列理想补偿相位、2-bit补偿相位和编码矩阵。"""
 
     # 自由空间相位常数β0=2π/λ；目标角度先由度转换为弧度。
     Beta0 = 2 * np.pi / Lambda
@@ -37,18 +37,19 @@ def calculate_2bit_compensation_code(Target_Angle_Deg: float, Lambda: float) -> 
     # 与MATLAB的mod(phi_comp,2*pi)一致，把理想补偿相位归一化到[0,2π)。
     Normalized_Compensation_Phase_Rad = np.mod(Ideal_Compensation_Phase_Rad, 2 * np.pi)
 
-    # 以45°、135°、225°、315°为分界，量化到最近的0°、90°、180°、270°。Code_Indices(0,...,3)对应rad(0,...,3pi/2)
-    Code_Indices = np.floor((Normalized_Compensation_Phase_Rad + np.pi / 4) / (np.pi / 2)).astype(int) % 4
-    Quantized_Compensation_Phase_Rad = Compensation_Phase_States_Rad[Code_Indices]
+    # 以45°、135°、225°、315°为分界，量化到最近的0°、90°、180°、270°。
+    # Coding_Matrix中的状态0、1、2、3分别对应0°、90°、180°、270°补偿相位。
+    Coding_Matrix = np.floor((Normalized_Compensation_Phase_Rad + np.pi / 4) / (np.pi / 2)).astype(int) % 4
+    Quantized_Compensation_Phase_Rad = Compensation_Phase_States_Rad[Coding_Matrix]
 
-    return Ideal_Compensation_Phase_Rad, Quantized_Compensation_Phase_Rad, Code_Indices
+    return Ideal_Compensation_Phase_Rad, Quantized_Compensation_Phase_Rad, Coding_Matrix
 
 
-def direction_pattern_dB(Code_Indices: np.ndarray, Lambda: float) -> np.ndarray:
+def direction_pattern_dB(Coding_Matrix: np.ndarray, Lambda: float) -> np.ndarray:
     """按照叠加定理逐单元累加远场，并以理想0°波束为0 dB参考。"""
 
     # 同一列两行使用相同量化补偿相位；该矩阵与实际2×16直流偏置分布对应。
-    Quantized_Compensation_Phase_Rad = Compensation_Phase_States_Rad[np.asarray(Code_Indices, dtype=int)]
+    Quantized_Compensation_Phase_Rad = Compensation_Phase_States_Rad[np.asarray(Coding_Matrix, dtype=int)]
     Compensation_Phase_Matrix_Rad = np.tile(Quantized_Compensation_Phase_Rad, (Rows, 1))
 
     # 在-90°至90°逐角度计算远场；Fields保存每个方向的复电场。
@@ -73,15 +74,16 @@ def direction_pattern_dB(Code_Indices: np.ndarray, Lambda: float) -> np.ndarray:
     return 10 * np.log10(np.maximum(Relative_Power, Minimum_Power))
 
 
-def plot_codebooks(angles_deg: np.ndarray, codes1: np.ndarray, codes2: np.ndarray) -> None:
-    """绘制两块超表面随UAV2方位角变化的几何2-bit码本。"""
+def plot_ce_coding_matrices(angles_deg: np.ndarray, CE_Optimal_Matrices_MS1: np.ndarray,
+                            CE_Optimal_Matrices_MS2: np.ndarray) -> None:
+    """绘制各UAV2方位角下由CE优化得到的两块超表面2-bit编码矩阵。"""
 
     figure, axes = plt.subplots(1, 2, figsize=(8.6, 3.2), sharey=True)
-    for ax, codes, title in [
-        (axes[0], codes1, "RIS1 geometry-based 2-bit compensation codebook"),
-        (axes[1], codes2, "RIS2 geometry-based 2-bit compensation codebook"),
+    for ax, Coding_Matrices, title in [
+        (axes[0], CE_Optimal_Matrices_MS1, "(a) MS1 CE-optimal coding matrix"),
+        (axes[1], CE_Optimal_Matrices_MS2, "(b) MS2 CE-optimal coding matrix"),
     ]:
-        image = ax.imshow(codes, origin="lower", aspect="auto", cmap="viridis", vmin=0, vmax=3,
+        image = ax.imshow(Coding_Matrices, origin="lower", aspect="auto", cmap="viridis", vmin=0, vmax=3,
                           extent=[0.5, Columns + 0.5, angles_deg[0], angles_deg[-1]])
         ax.set_xlabel("Column index")
         ax.set_title(title)
@@ -92,35 +94,35 @@ def plot_codebooks(angles_deg: np.ndarray, codes1: np.ndarray, codes2: np.ndarra
     figure.tight_layout()
 
 
-def plot_patterns(diagnostic: dict, Lambda: float) -> None:
-    """绘制诊断角度下的两端方向图和CE最终2×16补偿相位热力图。"""
+def plot_patterns(test_data: dict, Lambda: float) -> None:
+    """绘制测试角度下的两端方向图和CE最终2×16补偿相位热力图。"""
 
-    # 分别计算已知角度码本与盲CE码本的方向图。
-    p1_known = direction_pattern_dB(diagnostic["geometric_indices1"], Lambda)
-    p2_known = direction_pattern_dB(diagnostic["geometric_indices2"], Lambda)
-    p1_ce = direction_pattern_dB(diagnostic["ce_indices1"], Lambda)
-    p2_ce = direction_pattern_dB(diagnostic["ce_indices2"], Lambda)
+    # 分别计算测试角度下已知角度码本与盲CE码本的方向图。
+    MS1_Known_Pattern = direction_pattern_dB(test_data["Known_Angle_Matrix_MS1"], Lambda)
+    MS2_Known_Pattern = direction_pattern_dB(test_data["Known_Angle_Matrix_MS2"], Lambda)
+    MS1_CE_Pattern = direction_pattern_dB(test_data["CE_Optimal_Matrix_MS1"], Lambda)
+    MS2_CE_Pattern = direction_pattern_dB(test_data["CE_Optimal_Matrix_MS2"], Lambda)
 
     figure, axes = plt.subplots(2, 2, figsize=(8.6, 5.6), gridspec_kw={"height_ratios": [1.0, 0.55]})
 
-    # 上排分别显示RIS1与RIS2的水平面方向图。
+    # 上排分别显示MS1与MS2的水平面方向图。
     for ax, known, ce, title in [
-        (axes[0, 0], p1_known, p1_ce, "(a) RIS1 transmit pattern"),
-        (axes[0, 1], p2_known, p2_ce, "(b) RIS2 receive pattern"),
+        (axes[0, 0], MS1_Known_Pattern, MS1_CE_Pattern, "(a) MS1 transmit pattern"),
+        (axes[0, 1], MS2_Known_Pattern, MS2_CE_Pattern, "(b) MS2 receive pattern"),
     ]:
         ax.plot(Pattern_Angles_Deg, known, "--", color="#1b9e77", label="Known-angle 2-bit")
         ax.plot(Pattern_Angles_Deg, ce, "-", color="#7570b3", label="Blind CE")
-        ax.axvline(diagnostic["angle_deg"], color="#d95f02", linestyle="-.", label="Target direction")
+        ax.axvline(test_data["angle_deg"], color="#d95f02", linestyle="-.", label="Test direction")
         ax.set(xlim=(-90, 90), ylim=(Pattern_Floor_dB, 1), xlabel="Local azimuth (deg)",
                ylabel="Gain relative to broadside (dB)", title=title)
         ax.legend(loc="upper right")
 
     # 下排把16列状态复制为2行，直观显示实际2×16列控偏置分布。
-    for ax, indices, title in [
-        (axes[1, 0], diagnostic["ce_indices1"], "(c) RIS1 CE compensation-phase map"),
-        (axes[1, 1], diagnostic["ce_indices2"], "(d) RIS2 CE compensation-phase map"),
+    for ax, Coding_Matrix, title in [
+        (axes[1, 0], test_data["CE_Optimal_Matrix_MS1"], "(c) MS1 CE compensation-phase map"),
+        (axes[1, 1], test_data["CE_Optimal_Matrix_MS2"], "(d) MS2 CE compensation-phase map"),
     ]:
-        image = ax.imshow(np.tile(indices, (Rows, 1)), aspect="auto", cmap="viridis",
+        image = ax.imshow(np.tile(Coding_Matrix, (Rows, 1)), aspect="auto", cmap="viridis",
                           vmin=-0.5, vmax=3.5, interpolation="nearest")
         ax.set(xlabel="Column index", ylabel="Row index", title=title)
         ax.set_xticks(np.arange(Columns), np.arange(1, Columns + 1))
@@ -128,5 +130,5 @@ def plot_patterns(diagnostic: dict, Lambda: float) -> None:
         colorbar = figure.colorbar(image, ax=ax, ticks=[0, 1, 2, 3], fraction=0.045, pad=0.03)
         colorbar.ax.set_yticklabels(["0°", "90°", "180°", "270°"])
 
-    figure.suptitle(f"Patterns and CE compensation-phase maps at psi={diagnostic['angle_deg']:.0f}°", fontsize=12)
+    figure.suptitle(f"Patterns and CE compensation-phase maps at test angle psi={test_data['angle_deg']:.0f}°", fontsize=12)
     figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))

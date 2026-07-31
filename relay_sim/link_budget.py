@@ -8,11 +8,11 @@ from .metasurface import Columns, Element_Field_Exponent
 
 # 本文件只保存链路预算所需参数；dB量在计算时直接转成线性值，不再调用单位转换函数。
 Transmit_Power_dBm = -10.0
-Ris1_Broadside_Gain_dBi = 15.0
-Ris2_Broadside_Gain_dBi = 15.0
+MS1_Broadside_Gain_dBi = 15.0
+MS2_Broadside_Gain_dBi = 15.0
 Total_RoF_Gain_dB = -14.0
 Receiver_Misc_Gain_dB = -3.5
-Base_Power_dBm = Transmit_Power_dBm + Ris1_Broadside_Gain_dBi + Ris2_Broadside_Gain_dBi + Total_RoF_Gain_dB + Receiver_Misc_Gain_dB
+Base_Power_dBm = Transmit_Power_dBm + MS1_Broadside_Gain_dBi + MS2_Broadside_Gain_dBi + Total_RoF_Gain_dB + Receiver_Misc_Gain_dB
 
 # 接收噪声功率Pn=-174+10log10(B)+NF。
 Receiver_Bandwidth_Hz = 20e6

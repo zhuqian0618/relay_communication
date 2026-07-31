@@ -16,7 +16,7 @@ Aperture_Width_MS = Columns * Period_MS
 Far_Field_Distance_M = 2 * Aperture_Width_MS**2 / Lambda
 
 # 从两块超表面各自的辐射面观察时，列编号一致，因此相同编码指向相同本地方位。
-Ris2_Local_Angle_Sign = 1.0
+MS2_Local_Angle_Sign = 1.0
 
 
 def build_far_field_channel(angle_rad: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, complex]:
@@ -25,7 +25,7 @@ def build_far_field_channel(angle_rad: float) -> tuple[np.ndarray, np.ndarray, n
     # 按MATLAB相位公式显式计算每一列的空间相位β0*xn*sin(θ)。
     Beta0 = 2 * np.pi / Lambda
     Phase1_Rad = Beta0 * Column_Positions_MS * np.sin(angle_rad)
-    Phase2_Rad = Beta0 * Column_Positions_MS * np.sin(Ris2_Local_Angle_Sign * angle_rad)
+    Phase2_Rad = Beta0 * Column_Positions_MS * np.sin(MS2_Local_Angle_Sign * angle_rad)
 
     # 采用e^(jωt)约定，导向矢量使用负指数；列号一致时两块板在同一角度具有相同响应。
     a1 = np.exp(-1j * Phase1_Rad)
@@ -49,10 +49,10 @@ def plot_channel_at_test_angle(h12: np.ndarray, angle_deg: float) -> None:
 
     figure, axes = plt.subplots(1, 2, figsize=(8.2, 3.2))
 
-    # 左图显示RIS1每列到RIS2每列的传播相位。
+    # 左图显示MS1每列到MS2每列的传播相位。
     image = axes[0].imshow(np.angle(h12, deg=True), origin="lower", aspect="auto",
                            cmap="twilight", vmin=-180, vmax=180)
-    axes[0].set(xlabel="RIS1 column index", ylabel="RIS2 column index",
+    axes[0].set(xlabel="MS1 column index", ylabel="MS2 column index",
                 title=f"Channel phase at psi={angle_deg:.0f}°")
     figure.colorbar(image, ax=axes[0], label="Phase (deg)")
 
