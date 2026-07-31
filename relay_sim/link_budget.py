@@ -31,8 +31,8 @@ def received_power_dBm(v1: np.ndarray, v2: np.ndarray, angle_rad: float,
     ideal_power = np.abs(alpha) ** 2 * Columns**4
     beam_matching = np.clip(np.abs(h_eff) ** 2 / ideal_power, 1e-5, 1.0)
 
-    # 两端都偏转angle，因此单端cos(theta)^q功率损耗需要相乘两次。
-    scan_product = max(np.cos(angle_rad), 0.0) ** (2 * Element_Pattern_Exponent)
+    # 只考虑-90°至90°，两端均偏转angle时，扫描功率系数为cos(theta)^(2q)。
+    scan_product = np.cos(angle_rad) ** (2 * Element_Pattern_Exponent)
 
     # dB增益直接相加等价于线性增益相乘；最后仍以dBm输出。
     return float(Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * beam_matching * scan_product))

@@ -103,7 +103,7 @@ def main() -> None:
             beam_matching = np.clip(np.abs(h_eff) ** 2 / ideal_power, 1e-5, 1.0)
 
             # 先计算无随机测量误差的理论功率，再叠加频谱仪读数误差供CE使用。
-            scan_product = max(np.cos(angle_rad), 0.0) ** (2 * Element_Pattern_Exponent)
+            scan_product = np.cos(angle_rad) ** (2 * Element_Pattern_Exponent)
             theoretical_scores = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * beam_matching * scan_product)
             measured_scores = theoretical_scores + rng.normal(0.0, measurement_noise_std_dB, population_size)
 

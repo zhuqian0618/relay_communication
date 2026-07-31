@@ -1,4 +1,4 @@
-"""计算2-bit列控超表面的补偿相位编码，按照叠加定理计算远场方向图。"""
+"""计算2-bit列控超表面的相位编码，按照叠加定理计算远场方向图。"""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -24,9 +24,7 @@ Pattern_Angles_Deg = np.arange(-90.0, 90.01, 0.25)
 Pattern_Floor_dB = -50.0
 
 
-def calculate_2bit_compensation_code(
-    Target_Angle_Deg: float, Lambda: float
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def calculate_2bit_compensation_code(Target_Angle_Deg: float, Lambda: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """给定偏折角，依次计算16列理想补偿相位、2-bit补偿相位和编码编号。"""
 
     # 自由空间相位常数β0=2π/λ；目标角度先由度转换为弧度。
@@ -39,7 +37,7 @@ def calculate_2bit_compensation_code(
     # 与MATLAB的mod(phi_comp,2*pi)一致，把理想补偿相位归一化到[0,2π)。
     Normalized_Compensation_Phase_Rad = np.mod(Ideal_Compensation_Phase_Rad, 2 * np.pi)
 
-    # 以45°、135°、225°、315°为分界，量化到最近的0°、90°、180°、270°。
+    # 以45°、135°、225°、315°为分界，量化到最近的0°、90°、180°、270°。Code_Indices(0,...,3)对应rad(0,...,3pi/2)
     Code_Indices = np.floor((Normalized_Compensation_Phase_Rad + np.pi / 4) / (np.pi / 2)).astype(int) % 4
     Quantized_Compensation_Phase_Rad = Compensation_Phase_States_Rad[Code_Indices]
 
@@ -57,7 +55,7 @@ def direction_pattern_dB(Code_Indices: np.ndarray, Lambda: float) -> np.ndarray:
     Beta0 = 2 * np.pi / Lambda
     Fields = np.zeros(Pattern_Angles_Deg.size, dtype=complex)
 
-    # 逐个观察角、逐行、逐列累加exp[j(补偿相位+空间传播相位)]，直接体现叠加定理。
+    # 逐个观察角、逐行、逐列累加exp[j(空间传播相位+补偿相位)]，直接体现叠加定理。
     for Angle_Index, Angle_Deg in enumerate(Pattern_Angles_Deg):
         Angle_Rad = np.deg2rad(Angle_Deg)
         for Row_Index in range(Rows):
@@ -66,8 +64,8 @@ def direction_pattern_dB(Code_Indices: np.ndarray, Lambda: float) -> np.ndarray:
                 Compensation_Phase = Compensation_Phase_Matrix_Rad[Row_Index, Column_Index]
                 Fields[Angle_Index] += np.exp(1j * (Compensation_Phase + Space_Phase_Rad))
 
-    # 理想0°时32个单元同相，功率为(2×16)²；再乘单元功率方向图cos(θ)^q。
-    Element_Power = np.maximum(np.cos(np.deg2rad(Pattern_Angles_Deg)), 0.0) ** Element_Pattern_Exponent
+    # 只计算-90°至90°前向空间，该范围内cos(θ)非负，单元功率方向图直接取cos(θ)^q。
+    Element_Power = np.cos(np.deg2rad(Pattern_Angles_Deg)) ** Element_Pattern_Exponent
     Relative_Power = np.abs(Fields) ** 2 / (Rows * Columns) ** 2 * Element_Power
     return np.maximum(10 * np.log10(np.maximum(Relative_Power, 1e-300)), Pattern_Floor_dB)
 
