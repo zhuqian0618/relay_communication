@@ -20,7 +20,7 @@ Compensation_Phasors = np.exp(1j * Compensation_Phase_States_Rad)
 Element_Pattern_Exponent = 0.8
 
 # 方向图只显示水平面，绘制范围为-90°至90°。
-Pattern_Angles_Deg = np.arange(-90.0, 90.01, 0.25)
+Pattern_Angles_Deg = np.arange(-90.0, 90.01, 0.1)
 Pattern_Floor_dB = -50.0
 
 
