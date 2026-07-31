@@ -10,7 +10,7 @@ from relay_sim.channel import (
     Ris2_Local_Angle_Sign,
     Separation_Distance_M,
     build_far_field_channel,
-    plot_channel_diagnostics,
+    plot_channel_at_test_angle,
 )
 from relay_sim.link_budget import Base_Power_dBm, Noise_Power_dBm, plot_link_results, received_power_dBm
 from relay_sim.metasurface import (
@@ -30,7 +30,7 @@ def main() -> None:
 
     # ---------- 1. 实验扫描参数：只在本主程序中使用 ----------
     angles_deg = np.arange(-45.0, 45.01, 5.0)
-    diagnostic_angle_deg = -30.0
+    test_angle_deg = 25.0
 
     # ---------- 2. CE参数：算法是本文件核心，因此不再放入其他模块 ----------
     population_size = 72
@@ -52,8 +52,8 @@ def main() -> None:
     # ---------- 3. 为角度扫描结果分配列表 ----------
     power_known_dBm, power_ce_dBm = [], []
     geometric_codes1, geometric_codes2 = [], []
-    diagnostic = None
-    diagnostic_h12 = None
+    test_data = None
+    test_h12 = None
 
     # ---------- 4. 逐个方位角建立信道并运行两种方案 ----------
     for angle_deg in angles_deg:
@@ -163,10 +163,10 @@ def main() -> None:
         geometric_codes1.append(geometric_indices1)
         geometric_codes2.append(geometric_indices2)
 
-        # 保存一个诊断角度的信道、码本与CE过程，供后续三张图使用。
-        if np.isclose(angle_deg, diagnostic_angle_deg):
-            diagnostic_h12 = h12.copy()
-            diagnostic = {
+        # 保存测试角度的信道、码本与CE过程，供后续三张图使用。
+        if np.isclose(angle_deg, test_angle_deg):
+            test_h12 = h12.copy()
+            test_data = {
                 "angle_deg": float(angle_deg),
                 "geometric_indices1": geometric_indices1.copy(),
                 "geometric_indices2": geometric_indices2.copy(),
@@ -190,7 +190,7 @@ def main() -> None:
         "power_ce_dBm": power_ce_dBm,
         "snr_known_dB": power_known_dBm - Noise_Power_dBm,
         "snr_ce_dB": power_ce_dBm - Noise_Power_dBm,
-        "diagnostic": diagnostic,
+        "test": test_data,
     }
 
     # ---------- 10. 打印最重要的派生量，便于核对实验条件 ----------
@@ -203,16 +203,16 @@ def main() -> None:
     # ---------- 11. 各模块直接绘制自己负责的数据 ----------
     plt.rcParams.update({"figure.dpi": 100, "axes.grid": True, "grid.alpha": 0.25, "font.size": 10})
     plot_link_results(results)
-    plot_channel_diagnostics(diagnostic_h12, diagnostic_angle_deg)
+    plot_channel_at_test_angle(test_h12, test_angle_deg)
     plot_codebooks(angles_deg, np.asarray(geometric_codes1), np.asarray(geometric_codes2))
-    plot_patterns(diagnostic, Lambda)
+    plot_patterns(test_data, Lambda)
 
     # CE是主程序核心，因此最后一张CE概率图也直接在main()中绘制。
     figure, axes = plt.subplots(1, 2, figsize=(8.4, 3.2))
-    iteration = np.arange(1, diagnostic["measured_history_dBm"].size + 1)
-    axes[0].plot(iteration, diagnostic["measured_history_dBm"], "-o", ms=3.5, color="#d95f02")
+    iteration = np.arange(1, test_data["measured_history_dBm"].size + 1)
+    axes[0].plot(iteration, test_data["measured_history_dBm"], "-o", ms=3.5, color="#d95f02")
     axes[0].set(xlabel="CE iteration", ylabel="Noisy incumbent power (dBm)", title="(a) Measured CE history")
-    axes[1].plot(iteration, diagnostic["confidence_history"], "-o", ms=3.5, color="#7570b3")
+    axes[1].plot(iteration, test_data["confidence_history"], "-o", ms=3.5, color="#7570b3")
     axes[1].axhline(convergence_probability, color="0.35", linestyle="--", label="Threshold")
     axes[1].set(xlabel="CE iteration", ylabel="Mean maximum probability", ylim=(0.2, 1.02),
                 title="(b) CE probability confidence")

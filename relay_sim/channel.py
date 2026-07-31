@@ -1,4 +1,4 @@
-"""5.8 GHz远场空中信道参数、信道矩阵计算与诊断绘图。"""
+"""5.8 GHz远场空中信道参数、信道矩阵计算与测试角度绘图。"""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -40,7 +40,7 @@ def build_far_field_channel(angle_rad: float) -> tuple[np.ndarray, np.ndarray, n
     return h12, a1, a2, alpha
 
 
-def plot_channel_diagnostics(h12: np.ndarray, angle_deg: float) -> None:
+def plot_channel_at_test_angle(h12: np.ndarray, angle_deg: float) -> None:
     """用信道相位矩阵和奇异值检查远场rank-one模型。"""
 
     # 奇异值除以最大值后，理想rank-one信道只有第一个等于1。

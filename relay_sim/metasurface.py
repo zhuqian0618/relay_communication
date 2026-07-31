@@ -16,7 +16,7 @@ Column_Positions_MS = (np.arange(Columns) - (Columns - 1) / 2) * Period_MS
 Compensation_Phase_States_Rad = np.deg2rad([0.0, 90.0, 180.0, 270.0])
 Compensation_Phasors = np.exp(1j * Compensation_Phase_States_Rad)
 
-# 按Tian等公式(4)，用cos(theta)^q近似单元远场“场幅度”；本文取q=0.8。
+# cos(theta)^q近似单元远场“场幅度”；本文取q=0.8。
 Element_Field_Exponent = 0.8
 
 # 方向图只显示水平面，绘制范围为-90°至90°。
@@ -69,7 +69,8 @@ def direction_pattern_dB(Code_Indices: np.ndarray, Lambda: float) -> np.ndarray:
     Element_Field = np.cos(np.deg2rad(Pattern_Angles_Deg)) ** Element_Field_Exponent
     Total_Fields = Fields * Element_Field
     Relative_Power = np.abs(Total_Fields) ** 2 / (Rows * Columns) ** 2
-    return np.maximum(10 * np.log10(np.maximum(Relative_Power, 1e-300)), Pattern_Floor_dB)
+    Minimum_Power = 10 ** (Pattern_Floor_dB / 10)
+    return 10 * np.log10(np.maximum(Relative_Power, Minimum_Power))
 
 
 def plot_codebooks(angles_deg: np.ndarray, codes1: np.ndarray, codes2: np.ndarray) -> None:

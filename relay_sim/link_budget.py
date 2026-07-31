@@ -72,13 +72,13 @@ def plot_link_results(results: dict) -> None:
                    title=f"(c) SNR (noise={Noise_Power_dBm:.1f} dBm)")
 
     # 图(d)：只显示CE实际使用的含噪历史最优，并用三点移动平均帮助观察趋势。
-    measured = np.asarray(results["diagnostic"]["measured_history_dBm"])
+    measured = np.asarray(results["test"]["measured_history_dBm"])
     iteration = np.arange(1, measured.size + 1)
     moving_average = np.convolve(measured, np.ones(3) / 3, mode="valid")
     axes[1, 1].plot(iteration, measured, "-o", ms=3.5, color="#d95f02", label="Noisy incumbent")
     axes[1, 1].plot(iteration[2:], moving_average, color="#1b9e77", lw=2, label="3-point average")
     axes[1, 1].set(xlabel="CE iteration", ylabel="Measured power (dBm)",
-                   title=f"(d) Noisy CE history at psi={results['diagnostic']['angle_deg']:.0f}°")
+                   title=f"(d) Noisy CE history at test angle psi={results['test']['angle_deg']:.0f}°")
     axes[1, 1].legend(loc="best")
 
     figure.suptitle("Dual UAV-borne 2-bit metasurface far-field link", fontsize=14)
