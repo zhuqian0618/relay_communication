@@ -1,14 +1,19 @@
-# Python缓存
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 
-# VS Code配置
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.idea/
 .vscode/
 
-# PyCharm配置
-.idea/
+# Jupyter
+.ipynb_checkpoints/
 
-# 系统文件
+# OS
 .DS_Store
 Thumbs.db
