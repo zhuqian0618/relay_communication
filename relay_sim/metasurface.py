@@ -51,7 +51,7 @@ def calculate_2bit_compensation_code(Target_Angle_Deg: float) -> tuple[np.ndarra
 
 
 def direction_pattern_dB(Coding_Matrix: np.ndarray) -> np.ndarray:
-    """按照叠加定理逐单元累加远场，并以理想0°波束为0 dB参考。"""
+    """按照叠加定理累加2行16列单元的远场，并以理想0°波束为0 dB参考。"""
 
     # 同一列两行使用相同量化补偿相位；该矩阵与实际2×16直流偏置分布对应。
     Quantized_Compensation_Phase_Rad = Compensation_Phase_States_Rad[np.asarray(Coding_Matrix, dtype=int)]
@@ -60,7 +60,7 @@ def direction_pattern_dB(Coding_Matrix: np.ndarray) -> np.ndarray:
     # 在-90°至90°逐角度计算远场；Fields保存每个方向的复电场。
     Fields = np.zeros(Pattern_Angles_Deg.size, dtype=complex)
 
-    # 叠加定理逐个观察角、逐行、逐列累加exp[j(空间传播相位+补偿相位)]。
+    # 对每个观察角、每行和每列累加exp[j(空间传播相位+补偿相位)]。
     for Angle_Index, Angle_Deg in enumerate(Pattern_Angles_Deg):
         Angle_Rad = np.deg2rad(Angle_Deg)
         for Row_Index in range(Rows):
