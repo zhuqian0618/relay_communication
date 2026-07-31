@@ -60,7 +60,7 @@ def direction_pattern_dB(Coding_Matrix: np.ndarray) -> np.ndarray:
     # 在-90°至90°逐角度计算远场；Fields保存每个方向的复电场。
     Fields = np.zeros(Pattern_Angles_Deg.size, dtype=complex)
 
-    # 逐个观察角、逐行、逐列累加exp[j(空间传播相位+补偿相位)]，直接体现叠加定理。
+    # 叠加定理逐个观察角、逐行、逐列累加exp[j(空间传播相位+补偿相位)]。
     for Angle_Index, Angle_Deg in enumerate(Pattern_Angles_Deg):
         Angle_Rad = np.deg2rad(Angle_Deg)
         for Row_Index in range(Rows):
