@@ -37,7 +37,7 @@ def main() -> None:
     elite_fraction = 0.15
     smoothing = 0.65
     minimum_probability = 0.01
-    measurement_noise_std_dB = 0.20
+    SNR_dB = 30.0
     final_verification_repeats = 8
     convergence_probability = 0.985
     rng = np.random.default_rng(20260724)
@@ -53,11 +53,19 @@ def main() -> None:
     CE_Optimal_Matrices_MS1, CE_Optimal_Matrices_MS2 = [], []
     test_data = None
     test_h12 = None
+    controlled_noise_power_dBm = None
+
+    # 以“理想正侧向、双端完全匹配”的接收信号功率为1，按照指定SNR设置固定复AWGN功率。
+    noise_power_normalized = 10 ** (-SNR_dB / 10)
 
     # ---------- 4. 逐个方位角建立信道并运行两种方案 ----------
     for angle_deg in angles_deg:
         angle_rad = np.deg2rad(angle_deg)
         h12, a1, a2, alpha = build_far_field_channel(angle_rad)
+
+        # 距离固定时alpha不随角度改变；该噪声底使理想0°链路的SNR恰好等于SNR_dB。
+        if controlled_noise_power_dBm is None:
+            controlled_noise_power_dBm = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2) - SNR_dB
 
         # 已知角度方案：按“理想补偿相位→归一化→2-bit量化”的顺序计算两块板的16列编码。
         ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1 = calculate_2bit_compensation_code(angle_deg)
@@ -101,11 +109,16 @@ def main() -> None:
             ideal_power = np.abs(alpha) ** 2 * Columns**4
             beam_matching = np.clip(np.abs(h_eff) ** 2 / ideal_power, 1e-5, 1.0)
 
-            # 先计算无随机测量误差的理论功率，再叠加频谱仪读数误差供CE使用。
+            # 先计算无噪理论功率，再将复AWGN加到归一化接收场上，模拟y=hx+n后测得的总功率。
             # Tian等公式(4)把cos(theta)^0.8定义为单元场方向图；两端均取模平方后，总功率因子为cos(theta)^(4*0.8)。
             scan_product = np.cos(angle_rad) ** (4 * Element_Field_Exponent)
             theoretical_scores = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * beam_matching * scan_product)
-            measured_scores = theoretical_scores + rng.normal(0.0, measurement_noise_std_dB, population_size)
+            normalized_signal = h_eff / np.sqrt(ideal_power) * np.sqrt(scan_product)
+            complex_noise = np.sqrt(noise_power_normalized / 2) * (
+                rng.normal(size=population_size) + 1j * rng.normal(size=population_size)
+            )
+            noisy_power_factor = np.abs(normalized_signal + complex_noise) ** 2
+            measured_scores = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * np.maximum(noisy_power_factor, 1e-12))
 
             # 如果本代出现更高的含噪测量值，就更新历史最优码本。
             best_index = int(np.argmax(measured_scores))
@@ -141,14 +154,17 @@ def main() -> None:
         final_candidates = np.stack([incumbent, mode])
         final_means = np.zeros(2)
 
-        # 重复测量8次后取平均，降低单次正噪声造成的“虚假最优”。
+        # 重复测量8次后取平均，降低单次AWGN实现造成的“虚假最优”。
         for _ in range(final_verification_repeats):
             candidate_v1 = Compensation_Phasors[final_candidates[:, :Columns]]
             candidate_v2 = Compensation_Phasors[final_candidates[:, Columns:]]
             candidate_h = np.einsum("mi,ij,mj->m", np.conj(candidate_v2), h12, candidate_v1, optimize=True)
-            candidate_match = np.clip(np.abs(candidate_h) ** 2 / ideal_power, 1e-5, 1.0)
-            clean_power = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * candidate_match * scan_product)
-            final_means += clean_power + rng.normal(0.0, measurement_noise_std_dB, 2)
+            candidate_signal = candidate_h / np.sqrt(ideal_power) * np.sqrt(scan_product)
+            candidate_noise = np.sqrt(noise_power_normalized / 2) * (
+                rng.normal(size=2) + 1j * rng.normal(size=2)
+            )
+            candidate_noisy_power = np.abs(candidate_signal + candidate_noise) ** 2
+            final_means += Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * np.maximum(candidate_noisy_power, 1e-12))
 
         # 选择重复测量均值更高的最终码本。
         best_indices = final_candidates[int(np.argmax(final_means / final_verification_repeats))]
@@ -178,6 +194,7 @@ def main() -> None:
                 "measured_history_dBm": np.asarray(measured_history),
                 "confidence_history": np.asarray(confidence_history),
                 "final_probability": probability.copy(),
+                "SNR_dB": SNR_dB,
             }
 
     # ---------- 9. 整理绘图需要的数组 ----------
@@ -187,8 +204,10 @@ def main() -> None:
         "angles_deg": angles_deg,
         "power_known_dBm": power_known_dBm,
         "power_ce_dBm": power_ce_dBm,
-        "snr_known_dB": power_known_dBm - Noise_Power_dBm,
-        "snr_ce_dB": power_ce_dBm - Noise_Power_dBm,
+        "snr_known_dB": power_known_dBm - controlled_noise_power_dBm,
+        "snr_ce_dB": power_ce_dBm - controlled_noise_power_dBm,
+        "controlled_noise_power_dBm": controlled_noise_power_dBm,
+        "SNR_dB": SNR_dB,
         "test": test_data,
     }
 
@@ -198,6 +217,9 @@ def main() -> None:
     print(f"Aperture width: {Aperture_Width_MS:.3f} m")
     print(f"Fraunhofer distance: {Far_Field_Distance_M:.3f} m")
     print(f"UAV separation: {Separation_Distance_M:.3f} m")
+    print(f"Configured broadside-reference SNR: {SNR_dB:.1f} dB")
+    print(f"Controlled AWGN floor: {controlled_noise_power_dBm:.3f} dBm")
+    print(f"Thermal-noise reference from bandwidth and NF: {Noise_Power_dBm:.3f} dBm")
 
     # ---------- 11. 各模块直接绘制自己负责的数据 ----------
     plt.rcParams.update({"figure.dpi": 100, "axes.grid": True, "grid.alpha": 0.25, "font.size": 10})

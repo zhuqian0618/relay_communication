@@ -7,14 +7,14 @@ from .channel import Separation_Distance_M
 from .metasurface import Columns, Element_Field_Exponent
 
 # 本文件只保存链路预算所需参数；dB量在计算时直接转成线性值，不再调用单位转换函数。
-Transmit_Power_dBm = -10.0
+Transmit_Power_dBm = 0
 MS1_Broadside_Gain_dBi = 15.0
 MS2_Broadside_Gain_dBi = 15.0
-Total_RoF_Gain_dB = -14.0
-Receiver_Misc_Gain_dB = -3.5
+Total_RoF_Gain_dB = -20.0
+Receiver_Misc_Gain_dB = -3
 Base_Power_dBm = Transmit_Power_dBm + MS1_Broadside_Gain_dBi + MS2_Broadside_Gain_dBi + Total_RoF_Gain_dB + Receiver_Misc_Gain_dB
 
-# 接收噪声功率Pn=-174+10log10(B)+NF。
+# 接收机热噪声参考Pn=-174+10log10(B)+NF；主程序使用可调SNR生成受控AWGN。
 Receiver_Bandwidth_Hz = 20e6
 Receiver_Noise_Figure_dB = 7.0
 Noise_Power_dBm = -174.0 + 10 * np.log10(Receiver_Bandwidth_Hz) + Receiver_Noise_Figure_dB
@@ -65,11 +65,11 @@ def plot_link_results(results: dict) -> None:
                    title="(b) Aerial-link received power")
     axes[0, 1].legend(loc="best")
 
-    # 图(c)：SNR等于接收功率减去固定噪声功率，所以趋势与图(b)一致。
+    # 图(c)：SNR等于无噪接收信号功率减去由SNR_dB设定的固定AWGN噪声底。
     axes[1, 0].plot(angles, results["snr_known_dB"], "--o", ms=3.5, color="#1b9e77")
     axes[1, 0].plot(angles, results["snr_ce_dB"], "-o", ms=3.5, color="#7570b3")
     axes[1, 0].set(xlabel="UAV2 azimuth psi (deg)", ylabel="SNR (dB)",
-                   title=f"(c) SNR (noise={Noise_Power_dBm:.1f} dBm)")
+                   title=f"(c) SNR (reference={results['SNR_dB']:.1f} dB, noise={results['controlled_noise_power_dBm']:.1f} dBm)")
 
     # 图(d)：只显示CE实际使用的含噪历史最优，并用三点移动平均帮助观察趋势。
     measured = np.asarray(results["test"]["measured_history_dBm"])
