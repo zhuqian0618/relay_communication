@@ -18,10 +18,8 @@ Receiver_Misc_Gain_dB = -3
 Fixed_Link_Power_Gain_dB = MS1_Broadside_Gain_dBi + MS2_Broadside_Gain_dBi + Total_RoF_Gain_dB + Receiver_Misc_Gain_dB
 Fixed_Link_Field_Gain = np.sqrt(10 ** (Fixed_Link_Power_Gain_dB / 10))
 
-# 接收机噪声由Pn=-174+10log10(B)+NF计算；SNR由接收功率减去噪声功率得到。
-Receiver_Bandwidth_Hz = 20e6
-Receiver_Noise_Figure_dB = 7.0
-Noise_Power_dBm = -174.0 + 10 * np.log10(Receiver_Bandwidth_Hz) + Receiver_Noise_Figure_dB
+# 直接给定接收端总噪声功率sigma²；后续生成训练数据时只需修改该变量。
+Noise_Power_dBm = -90.0
 Noise_Power_W = 10 ** ((Noise_Power_dBm - 30) / 10)
 
 

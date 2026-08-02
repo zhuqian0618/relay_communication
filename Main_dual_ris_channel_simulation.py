@@ -232,7 +232,7 @@ def main() -> None:
     Broadside_Signal_Power_W = Transmit_Power_W * np.abs(Broadside_h_eff) ** 2
     Broadside_SNR_Linear = Broadside_Signal_Power_W / Noise_Power_W
     print(f"Transmit power: {Transmit_Power_dBm:.1f} dBm")
-    print(f"Physical receiver-noise power: {Noise_Power_dBm:.3f} dBm")
+    print(f"Directly specified noise power sigma^2: {Noise_Power_dBm:.3f} dBm")
     print(f"Broadside clean received power: {10 * np.log10(Broadside_Signal_Power_W) + 30:.3f} dBm")
     print(f"Broadside theoretical SNR: {10 * np.log10(Broadside_SNR_Linear):.3f} dB")
     print(f"CE pilot symbols per candidate: {pilot_symbols_per_candidate}")
