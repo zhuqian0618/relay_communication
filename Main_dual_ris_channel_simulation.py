@@ -40,6 +40,7 @@ def main() -> None:
     # ---------- 2. CE参数：算法是本文件核心，因此不再放入其他模块 ----------
     population_size = 72
     max_iterations = 25
+    ce_visualization_iterations = (1, 5, 15)
     elite_fraction = 0.15
     smoothing = 0.65
     minimum_probability = 0.01
@@ -47,6 +48,10 @@ def main() -> None:
     final_verification_pilot_symbols = 64
     convergence_probability = 0.95
     rng = np.random.default_rng(20260724)
+
+    # 三个编号均从1开始且不能超过最大迭代次数；修改上面的元组即可指定希望观察的时刻。
+    if len(ce_visualization_iterations) != 3 or any(i < 1 or i > max_iterations for i in ce_visualization_iterations):
+        raise ValueError("ce_visualization_iterations必须包含三个1至max_iterations之间的迭代编号。")
 
     # 两块MS各有16列、每列4种状态，所以联合概率矩阵大小为32×4。
     variable_count, state_count = 2 * Columns, Compensation_Phase_States_Rad.size
@@ -160,7 +165,8 @@ def main() -> None:
                 })
 
             # 当全部非固定变量的最大概率都超过阈值时提前停止。
-            if np.all(np.max(probability[mask], axis=1) >= convergence_probability):
+            if (iteration + 1 >= max(ce_visualization_iterations)
+                    and np.all(np.max(probability[mask], axis=1) >= convergence_probability)):
                 break
 
         # ---------- 7. 最终复测：比较历史最优与概率众数 ----------
@@ -228,6 +234,7 @@ def main() -> None:
                 "confidence_history": np.asarray(confidence_history),
                 "final_probability": probability.copy(),
                 "ce_iteration_snapshots": ce_iteration_snapshots,
+                "ce_visualization_iterations": ce_visualization_iterations,
                 "noise_power_dBm": Noise_Power_dBm,
                 "pilot_symbols_per_candidate": pilot_symbols_per_candidate,
             }

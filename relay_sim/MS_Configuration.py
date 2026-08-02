@@ -150,15 +150,15 @@ def plot_patterns(test_data: dict) -> None:
 
 
 def plot_ce_iteration_evolution(test_data: dict) -> None:
-    """选取CE初期、中期和最终状态，显示概率、所选相位和两块MS方向图的演化。"""
+    """显示用户指定的三次CE迭代所对应的概率、相位和两块MS方向图。"""
 
     snapshots = test_data["ce_iteration_snapshots"]
     if not snapshots:
         return
 
-    # 从完整迭代记录中等间隔选取三个代表时刻，避免图中过多重复曲线。
-    Selected_Indices = np.unique(np.rint(np.linspace(0, len(snapshots) - 1, min(3, len(snapshots)))).astype(int))
-    Selected_Snapshots = [snapshots[index] for index in Selected_Indices]
+    # 主函数中的ce_visualization_iterations直接决定三列子图分别显示哪一次迭代。
+    Snapshot_By_Iteration = {snapshot["iteration"]: snapshot for snapshot in snapshots}
+    Selected_Snapshots = [Snapshot_By_Iteration[i] for i in test_data["ce_visualization_iterations"]]
     figure, axes = plt.subplots(3, len(Selected_Snapshots), figsize=(3.7 * len(Selected_Snapshots), 7.4), squeeze=False)
     Phase_States_Deg = np.rad2deg(Compensation_Phase_States_Rad)
 
