@@ -3,23 +3,20 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from relay_sim.channel import (
+from relay_sim.Channel_Modeling import (
     Aperture_Width_MS,
     Far_Field_Distance_M,
-    Separation_Distance_M,
-    build_far_field_channel,
-    plot_channel_at_test_angle,
-)
-from relay_sim.link_budget import (
     Fixed_Link_Field_Gain,
     Noise_Power_W,
     Noise_Power_dBm,
+    Separation_Distance_M,
     Transmit_Power_W,
     Transmit_Power_dBm,
+    build_far_field_channel,
     link_metrics,
     plot_link_results,
 )
-from relay_sim.metasurface import (
+from relay_sim.MS_Configuration import (
     Columns,
     Element_Field_Exponent,
     Lambda,
@@ -28,6 +25,7 @@ from relay_sim.metasurface import (
     Compensation_Phase_States_Rad,
     calculate_2bit_compensation_code,
     plot_ce_coding_matrices,
+    plot_ce_iteration_evolution,
     plot_patterns,
 )
 
@@ -61,12 +59,13 @@ def main() -> None:
     snr_known_dB, snr_ce_dB = [], []
     CE_Optimal_Matrices_MS1, CE_Optimal_Matrices_MS2 = [], []
     test_data = None
-    test_h12 = None
 
     # ---------- 4. 逐个方位角建立信道并运行两种方案 ----------
     for angle_deg in angles_deg:
         angle_rad = np.deg2rad(angle_deg)
-        h12, a1, a2, alpha = build_far_field_channel(angle_rad)
+        is_test_angle = np.isclose(angle_deg, test_angle_deg)
+        ce_iteration_snapshots = []
+        h12, _, _, alpha = build_far_field_channel(angle_rad)
 
         # 已知角度方案：搜索公共相位，使2-bit量化后的目标方向相干叠加功率最大。
         (ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1,
@@ -150,6 +149,16 @@ def main() -> None:
             mask[list(fixed_variables)] = False
             confidence_history.append(np.max(probability[mask], axis=1).mean())
 
+            # 只记录测试角度的CE内部状态，供后续展示概率、相位和方向图如何随迭代演化。
+            if is_test_angle:
+                ce_iteration_snapshots.append({
+                    "iteration": iteration + 1,
+                    "probability": probability.copy(),
+                    "Coding_Matrix_MS1": incumbent[:Columns].copy(),
+                    "Coding_Matrix_MS2": incumbent[Columns:].copy(),
+                    "estimated_snr_dB": float(incumbent_score),
+                })
+
             # 当全部非固定变量的最大概率都超过阈值时提前停止。
             if np.all(np.max(probability[mask], axis=1) >= convergence_probability):
                 break
@@ -177,6 +186,20 @@ def main() -> None:
         CE_v1 = Compensation_Phasors[CE_Optimal_Matrix_MS1]
         CE_v2 = Compensation_Phasors[CE_Optimal_Matrix_MS2]
 
+        # 最后一帧采用复测后真正选定的联合编码，保证演化图终点与其余结果图完全一致。
+        if is_test_angle:
+            final_snapshot = {
+                "iteration": len(estimated_snr_history),
+                "probability": probability.copy(),
+                "Coding_Matrix_MS1": CE_Optimal_Matrix_MS1.copy(),
+                "Coding_Matrix_MS2": CE_Optimal_Matrix_MS2.copy(),
+                "estimated_snr_dB": float(10 * np.log10(max(float(np.max(final_estimated_snr)), 1e-30))),
+            }
+            if ce_iteration_snapshots:
+                ce_iteration_snapshots[-1] = final_snapshot
+            else:
+                ce_iteration_snapshots.append(final_snapshot)
+
         # ---------- 8. 用统一模型计算无噪接收信号功率与理论SNR ----------
         _, Known_Signal_Power_W, Known_SNR_Linear = link_metrics(Known_Angle_v1, Known_Angle_v2, angle_rad, h12)
         _, CE_Signal_Power_W, CE_SNR_Linear = link_metrics(CE_v1, CE_v2, angle_rad, h12)
@@ -187,9 +210,8 @@ def main() -> None:
         CE_Optimal_Matrices_MS1.append(CE_Optimal_Matrix_MS1.copy())
         CE_Optimal_Matrices_MS2.append(CE_Optimal_Matrix_MS2.copy())
 
-        # 保存测试角度的信道、码本与CE过程，供后续三张图使用。
-        if np.isclose(angle_deg, test_angle_deg):
-            test_h12 = h12.copy()
+        # 保存测试角度的码本与CE过程，供最终方向图、编码图和迭代演化图使用。
+        if is_test_angle:
             test_data = {
                 "angle_deg": float(angle_deg),
                 "Known_Angle_Matrix_MS1": Known_Angle_Matrix_MS1.copy(),
@@ -205,6 +227,7 @@ def main() -> None:
                 "estimated_snr_history_dB": np.asarray(estimated_snr_history),
                 "confidence_history": np.asarray(confidence_history),
                 "final_probability": probability.copy(),
+                "ce_iteration_snapshots": ce_iteration_snapshots,
                 "noise_power_dBm": Noise_Power_dBm,
                 "pilot_symbols_per_candidate": pilot_symbols_per_candidate,
             }
@@ -240,9 +263,9 @@ def main() -> None:
     # ---------- 11. 各模块直接绘制自己负责的数据 ----------
     plt.rcParams.update({"figure.dpi": 100, "axes.grid": True, "grid.alpha": 0.25, "font.size": 10})
     plot_link_results(results)
-    plot_channel_at_test_angle(test_h12, test_angle_deg)
     plot_ce_coding_matrices(angles_deg, np.asarray(CE_Optimal_Matrices_MS1), np.asarray(CE_Optimal_Matrices_MS2))
     plot_patterns(test_data)
+    plot_ce_iteration_evolution(test_data)
 
     # CE是主程序核心，因此最后一张CE概率图也直接在main()中绘制。
     figure, axes = plt.subplots(1, 2, figsize=(8.4, 3.2))

@@ -1,10 +1,31 @@
-"""RoF链路、统一等效信道、接收功率、理论SNR以及总体结果绘图。"""
+"""统一建立远场空中信道、等效信道、链路预算、接收功率和理论SNR。"""
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .channel import Separation_Distance_M
-from .metasurface import Columns, Element_Field_Exponent
+from .MS_Configuration import Beta0, Column_Positions_MS, Columns, Element_Field_Exponent, Lambda, Period_MS
+
+# 两块超表面中心间距固定为6.5 m；孔径宽度和夫琅禾费距离用于检查远场条件。
+Separation_Distance_M = 6.5
+Aperture_Width_MS = Columns * Period_MS
+Far_Field_Distance_M = 2 * Aperture_Width_MS**2 / Lambda
+
+
+def build_far_field_channel(angle_rad: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, complex]:
+    """构造同一水平面、固定距离、单径LoS条件下的16×16远场信道矩阵。"""
+
+    # 两块MS列编号与朝向定义一致，因此给定同一局部角度时使用相同空间响应向量。
+    Space_Phase_Rad = Beta0 * Column_Positions_MS * np.sin(angle_rad)
+    a1 = np.exp(-1j * Space_Phase_Rad)
+    a2 = np.exp(-1j * Space_Phase_Rad)
+
+    # alpha包含Friis场衰减lambda/(4*pi*R)以及传播距离引起的公共相位。
+    alpha = Lambda / (4 * np.pi * Separation_Distance_M)
+    alpha *= np.exp(-1j * Beta0 * Separation_Distance_M)
+
+    # 远场单径LoS信道为接收空间响应和发射空间响应共轭转置的外积，因此理论秩为1。
+    h12 = alpha * np.outer(a2, np.conj(a1))
+    return h12, a1, a2, complex(alpha)
 
 # 发射功率只在统一模型y=sqrt(Pt)*h_eff*s+n中出现一次。
 Transmit_Power_dBm = 15
@@ -52,7 +73,7 @@ def plot_link_results(results: dict) -> None:
     radius = Separation_Distance_M
     figure, axes = plt.subplots(2, 2, figsize=(8.6, 6.0))
 
-    # 图(a)：UAV2在以UAV1为圆心、半径10 m的圆弧上运动。
+    # 图(a)：UAV2在以UAV1为圆心、半径6.5 m的圆弧上运动。
     full_circle = np.linspace(0, 2 * np.pi, 400)
     axes[0, 0].plot(radius * np.cos(full_circle), radius * np.sin(full_circle), "--", color="0.75")
     axes[0, 0].plot(radius * np.cos(np.deg2rad(angles)), radius * np.sin(np.deg2rad(angles)),
