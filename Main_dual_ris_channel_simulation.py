@@ -10,7 +10,13 @@ from relay_sim.channel import (
     build_far_field_channel,
     plot_channel_at_test_angle,
 )
-from relay_sim.link_budget import Base_Power_dBm, Noise_Power_dBm, plot_link_results, received_power_dBm
+from relay_sim.link_budget import (
+    Base_Power_dBm,
+    Noise_Power_dBm,
+    Transmit_Power_dBm,
+    plot_link_results,
+    received_power_dBm,
+)
 from relay_sim.metasurface import (
     Columns,
     Element_Field_Exponent,
@@ -37,7 +43,6 @@ def main() -> None:
     elite_fraction = 0.15
     smoothing = 0.65
     minimum_probability = 0.01
-    SNR_dB = 50.0
     final_verification_repeats = 8
     convergence_probability = 0.985
     rng = np.random.default_rng(20260724)
@@ -53,19 +58,16 @@ def main() -> None:
     CE_Optimal_Matrices_MS1, CE_Optimal_Matrices_MS2 = [], []
     test_data = None
     test_h12 = None
-    controlled_noise_power_dBm = None
-
-    # 以“理想正侧向、双端完全匹配”的接收信号功率为1，按照指定SNR设置固定复AWGN功率。
-    noise_power_normalized = 10 ** (-SNR_dB / 10)
 
     # ---------- 4. 逐个方位角建立信道并运行两种方案 ----------
     for angle_deg in angles_deg:
         angle_rad = np.deg2rad(angle_deg)
         h12, a1, a2, alpha = build_far_field_channel(angle_rad)
 
-        # 距离固定时alpha不随角度改变；该噪声底使理想0°链路的SNR恰好等于SNR_dB。
-        if controlled_noise_power_dBm is None:
-            controlled_noise_power_dBm = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2) - SNR_dB
+        # 噪声功率由接收带宽和噪声系数确定，不再人为指定SNR。
+        # 将固定物理噪声换算到归一化接收场域，以便按照y=hx+n加入复AWGN。
+        reference_power_dBm = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2)
+        noise_power_normalized = 10 ** ((Noise_Power_dBm - reference_power_dBm) / 10)
 
         # 已知角度方案：按“理想补偿相位→归一化→2-bit量化”的顺序计算两块板的16列编码。
         ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1 = calculate_2bit_compensation_code(angle_deg)
@@ -194,7 +196,7 @@ def main() -> None:
                 "measured_history_dBm": np.asarray(measured_history),
                 "confidence_history": np.asarray(confidence_history),
                 "final_probability": probability.copy(),
-                "SNR_dB": SNR_dB,
+                "noise_power_dBm": Noise_Power_dBm,
             }
 
     # ---------- 9. 整理绘图需要的数组 ----------
@@ -204,10 +206,9 @@ def main() -> None:
         "angles_deg": angles_deg,
         "power_known_dBm": power_known_dBm,
         "power_ce_dBm": power_ce_dBm,
-        "snr_known_dB": power_known_dBm - controlled_noise_power_dBm,
-        "snr_ce_dB": power_ce_dBm - controlled_noise_power_dBm,
-        "controlled_noise_power_dBm": controlled_noise_power_dBm,
-        "SNR_dB": SNR_dB,
+        "snr_known_dB": power_known_dBm - Noise_Power_dBm,
+        "snr_ce_dB": power_ce_dBm - Noise_Power_dBm,
+        "noise_power_dBm": Noise_Power_dBm,
         "test": test_data,
     }
 
@@ -217,9 +218,10 @@ def main() -> None:
     print(f"Aperture width: {Aperture_Width_MS:.3f} m")
     print(f"Fraunhofer distance: {Far_Field_Distance_M:.3f} m")
     print(f"UAV separation: {Separation_Distance_M:.3f} m")
-    print(f"Configured broadside-reference SNR: {SNR_dB:.1f} dB")
-    print(f"Controlled AWGN floor: {controlled_noise_power_dBm:.3f} dBm")
-    print(f"Thermal-noise reference from bandwidth and NF: {Noise_Power_dBm:.3f} dBm")
+    broadside_reference_power_dBm = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2)
+    print(f"Transmit power: {Transmit_Power_dBm:.1f} dBm")
+    print(f"Physical receiver-noise power: {Noise_Power_dBm:.3f} dBm")
+    print(f"Derived broadside-reference SNR: {broadside_reference_power_dBm - Noise_Power_dBm:.3f} dB")
 
     # ---------- 11. 各模块直接绘制自己负责的数据 ----------
     plt.rcParams.update({"figure.dpi": 100, "axes.grid": True, "grid.alpha": 0.25, "font.size": 10})
