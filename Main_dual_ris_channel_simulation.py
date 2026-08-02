@@ -33,11 +33,11 @@ def main() -> None:
 
     # ---------- 2. CE参数：算法是本文件核心，因此不再放入其他模块 ----------
     population_size = 72
-    max_iterations = 22
+    max_iterations = 25
     elite_fraction = 0.15
     smoothing = 0.65
     minimum_probability = 0.01
-    SNR_dB = 30.0
+    SNR_dB = 50.0
     final_verification_repeats = 8
     convergence_probability = 0.985
     rng = np.random.default_rng(20260724)
