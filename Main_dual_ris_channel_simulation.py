@@ -11,11 +11,13 @@ from relay_sim.channel import (
     plot_channel_at_test_angle,
 )
 from relay_sim.link_budget import (
-    Base_Power_dBm,
+    Fixed_Link_Field_Gain,
+    Noise_Power_W,
     Noise_Power_dBm,
+    Transmit_Power_W,
     Transmit_Power_dBm,
+    link_metrics,
     plot_link_results,
-    received_power_dBm,
 )
 from relay_sim.metasurface import (
     Columns,
@@ -31,7 +33,7 @@ from relay_sim.metasurface import (
 
 
 def main() -> None:
-    """按19个方位角完成双超表面链路仿真并显示全部结果。"""
+    """按25个方位角完成双超表面链路仿真并显示全部结果。"""
 
     # ---------- 1. 实验扫描参数：只在本主程序中使用 ----------
     angles_deg = np.arange(-60.0, 60.01, 5.0)
@@ -43,8 +45,9 @@ def main() -> None:
     elite_fraction = 0.15
     smoothing = 0.65
     minimum_probability = 0.01
-    final_verification_repeats = 8
-    convergence_probability = 0.985
+    pilot_symbols_per_candidate = 16
+    final_verification_pilot_symbols = 64
+    convergence_probability = 0.95
     rng = np.random.default_rng(20260724)
 
     # 两块MS各有16列、每列4种状态，所以联合概率矩阵大小为32×4。
@@ -55,6 +58,7 @@ def main() -> None:
 
     # ---------- 3. 为角度扫描结果分配列表 ----------
     power_known_dBm, power_ce_dBm = [], []
+    snr_known_dB, snr_ce_dB = [], []
     CE_Optimal_Matrices_MS1, CE_Optimal_Matrices_MS2 = [], []
     test_data = None
     test_h12 = None
@@ -64,13 +68,9 @@ def main() -> None:
         angle_rad = np.deg2rad(angle_deg)
         h12, a1, a2, alpha = build_far_field_channel(angle_rad)
 
-        # 噪声功率由接收带宽和噪声系数确定，不再人为指定SNR。
-        # 将固定物理噪声换算到归一化接收场域，以便按照y=hx+n加入复AWGN。
-        reference_power_dBm = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2)
-        noise_power_normalized = 10 ** ((Noise_Power_dBm - reference_power_dBm) / 10)
-
         # 已知角度方案：搜索公共相位，使2-bit量化后的目标方向相干叠加功率最大。
-        ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1, optimal_common_phase_rad, Direct_Coding_Matrix = calculate_2bit_compensation_code(angle_deg)
+        (ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1,
+         optimal_common_phase_rad, Direct_Coding_Matrix) = calculate_2bit_compensation_code(angle_deg)
 
         # 两块MS的列编号和直流偏置设计一致，因此已知角度时直接使用相同编码矩阵。
         ideal_compensation_phase2 = ideal_compensation_phase1.copy()
@@ -80,18 +80,22 @@ def main() -> None:
         Known_Angle_v2 = Compensation_Phasors[Known_Angle_Matrix_MS2]
 
         # ---------- 5. 未知CSI盲CE：从均匀概率开始 ----------
+        # 初始化均匀概率，矩阵维度(variable_count*state_count)每个元素都是1/4。
         probability = np.full((variable_count, state_count), 1 / state_count)
+
+        # MS1和MS2第一列固定为状态0
         for fixed in fixed_variables:
             probability[fixed] = [1.0, 0.0, 0.0, 0.0]
 
-        # incumbent保存含噪测量意义下截至当前最好的联合码本。
+        # incumbent保存导频估计SNR意义下截至当前最好的联合码本。
         incumbent = np.zeros(variable_count, dtype=int)
         incumbent_score = -np.inf
-        measured_history, confidence_history = [], []
+        estimated_snr_history, confidence_history = [], []
 
         # ---------- 6. CE迭代：采样 → 测量 → Elite → 更新概率 ----------
         for iteration in range(max_iterations):
-            # 每个变量都按照自己的一行概率独立抽取补偿相位状态。
+
+            # 每个变量都按照自己的一行概率独立抽取补偿相位状态，矩阵维度(population_size*variable_count)。
             samples = np.empty((population_size, variable_count), dtype=int)
             for variable in range(variable_count):
                 samples[:, variable] = rng.choice(state_count, population_size, p=probability[variable])
@@ -106,31 +110,31 @@ def main() -> None:
             v1_batch = Compensation_Phasors[samples[:, :Columns]]
             v2_batch = Compensation_Phasors[samples[:, Columns:]]
 
-            # 一次性计算72个候选的v2^H*H12*v1，不单独定义评价函数。
-            h_eff = np.einsum("mi,ij,mj->m", np.conj(v2_batch), h12, v1_batch, optimize=True)
-            ideal_power = np.abs(alpha) ** 2 * Columns**4
-            beam_matching = np.clip(np.abs(h_eff) ** 2 / ideal_power, 1e-5, 1.0)
+            # v2^H*H12*v1给出空中复信道；除以N1*N2后，再加入固定链路场增益与双端扫描场因子。
+            Air_Channels = np.einsum("mi,ij,mj->m", np.conj(v2_batch), h12, v1_batch, optimize=True)
+            Scan_Field_Factor = np.cos(angle_rad) ** (2 * Element_Field_Exponent)
+            h_eff_batch = Fixed_Link_Field_Gain * Air_Channels / Columns**2 * Scan_Field_Factor
 
-            # 先计算无噪理论功率，再将复AWGN加到归一化接收场上，模拟y=hx+n后测得的总功率。
-            # Tian等公式(4)把cos(theta)^0.8定义为单元场方向图；两端均取模平方后，总功率因子为cos(theta)^(4*0.8)。
-            scan_product = np.cos(angle_rad) ** (4 * Element_Field_Exponent)
-            theoretical_scores = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * beam_matching * scan_product)
-            normalized_signal = h_eff / np.sqrt(ideal_power) * np.sqrt(scan_product)
-            complex_noise = np.sqrt(noise_power_normalized / 2) * (
-                rng.normal(size=population_size) + 1j * rng.normal(size=population_size)
+            # 采用统一模型y=sqrt(Pt)*h_eff*s+n。导频s=1且E[|s|²]=1，n为方差sigma²的复AWGN。
+            # 每个候选重复发送16枚导频，用平均|y|²估计总功率，再减去已知噪声功率得到有用信号功率。
+            noise = np.sqrt(Noise_Power_W / 2) * (
+                rng.normal(size=(pilot_symbols_per_candidate, population_size))
+                + 1j * rng.normal(size=(pilot_symbols_per_candidate, population_size))
             )
-            noisy_power_factor = np.abs(normalized_signal + complex_noise) ** 2
-            measured_scores = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * np.maximum(noisy_power_factor, 1e-12))
+            received_pilots = np.sqrt(Transmit_Power_W) * h_eff_batch[None, :] + noise
+            estimated_total_power_W = np.mean(np.abs(received_pilots) ** 2, axis=0)
+            estimated_signal_power_W = np.maximum(estimated_total_power_W - Noise_Power_W, 1e-30)
+            estimated_snr_scores_dB = 10 * np.log10(estimated_signal_power_W / Noise_Power_W)
 
-            # 如果本代出现更高的含噪测量值，就更新历史最优码本。
-            best_index = int(np.argmax(measured_scores))
-            if measured_scores[best_index] > incumbent_score:
-                incumbent_score = float(measured_scores[best_index])
+            # 如果本代出现更高的导频估计SNR，就更新历史最优码本。
+            best_index = int(np.argmax(estimated_snr_scores_dB))
+            if estimated_snr_scores_dB[best_index] > incumbent_score:
+                incumbent_score = float(estimated_snr_scores_dB[best_index])
                 incumbent = samples[best_index].copy()
 
-            # 取功率最高的前15%样本，并统计每个变量中四种补偿相位的出现频率。
+            # 取估计SNR最高的前15%样本，并统计每个变量中四种补偿相位的出现频率。
             elite_count = max(2, int(np.ceil(elite_fraction * population_size)))
-            elite_samples = samples[np.argsort(measured_scores)[-elite_count:]]
+            elite_samples = samples[np.argsort(estimated_snr_scores_dB)[-elite_count:]]
             elite_probability = np.column_stack([(elite_samples == state).mean(axis=0) for state in range(state_count)])
 
             # 用平滑系数更新概率，同时保留最小探索概率，防止过早锁死。
@@ -140,8 +144,8 @@ def main() -> None:
             for fixed in fixed_variables:
                 probability[fixed] = [1.0, 0.0, 0.0, 0.0]
 
-            # 记录CE真正看到的含噪历史最优与当前平均置信度。
-            measured_history.append(incumbent_score)
+            # 记录CE真正看到的估计SNR历史最优与当前平均置信度。
+            estimated_snr_history.append(incumbent_score)
             mask = np.ones(variable_count, dtype=bool)
             mask[list(fixed_variables)] = False
             confidence_history.append(np.max(probability[mask], axis=1).mean())
@@ -154,29 +158,32 @@ def main() -> None:
         mode = np.argmax(probability, axis=1)
         mode[list(fixed_variables)] = 0
         final_candidates = np.stack([incumbent, mode])
-        final_means = np.zeros(2)
+        candidate_v1 = Compensation_Phasors[final_candidates[:, :Columns]]
+        candidate_v2 = Compensation_Phasors[final_candidates[:, Columns:]]
+        candidate_air_channels = np.einsum("mi,ij,mj->m", np.conj(candidate_v2), h12, candidate_v1, optimize=True)
+        candidate_h_eff = Fixed_Link_Field_Gain * candidate_air_channels / Columns**2 * Scan_Field_Factor
 
-        # 重复测量8次后取平均，降低单次AWGN实现造成的“虚假最优”。
-        for _ in range(final_verification_repeats):
-            candidate_v1 = Compensation_Phasors[final_candidates[:, :Columns]]
-            candidate_v2 = Compensation_Phasors[final_candidates[:, Columns:]]
-            candidate_h = np.einsum("mi,ij,mj->m", np.conj(candidate_v2), h12, candidate_v1, optimize=True)
-            candidate_signal = candidate_h / np.sqrt(ideal_power) * np.sqrt(scan_product)
-            candidate_noise = np.sqrt(noise_power_normalized / 2) * (
-                rng.normal(size=2) + 1j * rng.normal(size=2)
-            )
-            candidate_noisy_power = np.abs(candidate_signal + candidate_noise) ** 2
-            final_means += Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * np.maximum(candidate_noisy_power, 1e-12))
-
-        # 选择重复测量均值更高的最终码本。
-        best_indices = final_candidates[int(np.argmax(final_means / final_verification_repeats))]
+        # 对历史最优和概率众数各发送64枚导频，以同一个SNR估计公式完成最终复测。
+        final_noise = np.sqrt(Noise_Power_W / 2) * (
+            rng.normal(size=(final_verification_pilot_symbols, 2))
+            + 1j * rng.normal(size=(final_verification_pilot_symbols, 2))
+        )
+        final_received_pilots = np.sqrt(Transmit_Power_W) * candidate_h_eff[None, :] + final_noise
+        final_total_power_W = np.mean(np.abs(final_received_pilots) ** 2, axis=0)
+        final_signal_power_W = np.maximum(final_total_power_W - Noise_Power_W, 1e-30)
+        final_estimated_snr = final_signal_power_W / Noise_Power_W
+        best_indices = final_candidates[int(np.argmax(final_estimated_snr))]
         CE_Optimal_Matrix_MS1, CE_Optimal_Matrix_MS2 = best_indices[:Columns], best_indices[Columns:]
         CE_v1 = Compensation_Phasors[CE_Optimal_Matrix_MS1]
         CE_v2 = Compensation_Phasors[CE_Optimal_Matrix_MS2]
 
-        # ---------- 8. 用统一链路预算计算两种方案的最终理论接收功率 ----------
-        power_known_dBm.append(received_power_dBm(Known_Angle_v1, Known_Angle_v2, angle_rad, h12, alpha))
-        power_ce_dBm.append(received_power_dBm(CE_v1, CE_v2, angle_rad, h12, alpha))
+        # ---------- 8. 用统一模型计算无噪接收信号功率与理论SNR ----------
+        _, Known_Signal_Power_W, Known_SNR_Linear = link_metrics(Known_Angle_v1, Known_Angle_v2, angle_rad, h12)
+        _, CE_Signal_Power_W, CE_SNR_Linear = link_metrics(CE_v1, CE_v2, angle_rad, h12)
+        power_known_dBm.append(10 * np.log10(max(Known_Signal_Power_W, 1e-30)) + 30)
+        power_ce_dBm.append(10 * np.log10(max(CE_Signal_Power_W, 1e-30)) + 30)
+        snr_known_dB.append(10 * np.log10(max(Known_SNR_Linear, 1e-30)))
+        snr_ce_dB.append(10 * np.log10(max(CE_SNR_Linear, 1e-30)))
         CE_Optimal_Matrices_MS1.append(CE_Optimal_Matrix_MS1.copy())
         CE_Optimal_Matrices_MS2.append(CE_Optimal_Matrix_MS2.copy())
 
@@ -195,21 +202,22 @@ def main() -> None:
                 "Direct_Coding_Matrix": Direct_Coding_Matrix.copy(),
                 "CE_Optimal_Matrix_MS1": CE_Optimal_Matrix_MS1.copy(),
                 "CE_Optimal_Matrix_MS2": CE_Optimal_Matrix_MS2.copy(),
-                "measured_history_dBm": np.asarray(measured_history),
+                "estimated_snr_history_dB": np.asarray(estimated_snr_history),
                 "confidence_history": np.asarray(confidence_history),
                 "final_probability": probability.copy(),
                 "noise_power_dBm": Noise_Power_dBm,
+                "pilot_symbols_per_candidate": pilot_symbols_per_candidate,
             }
 
     # ---------- 9. 整理绘图需要的数组 ----------
-    power_known_dBm = np.asarray(power_known_dBm)
-    power_ce_dBm = np.asarray(power_ce_dBm)
+    power_known_dBm, power_ce_dBm = np.asarray(power_known_dBm), np.asarray(power_ce_dBm)
+    snr_known_dB, snr_ce_dB = np.asarray(snr_known_dB), np.asarray(snr_ce_dB)
     results = {
         "angles_deg": angles_deg,
         "power_known_dBm": power_known_dBm,
         "power_ce_dBm": power_ce_dBm,
-        "snr_known_dB": power_known_dBm - Noise_Power_dBm,
-        "snr_ce_dB": power_ce_dBm - Noise_Power_dBm,
+        "snr_known_dB": snr_known_dB,
+        "snr_ce_dB": snr_ce_dB,
         "noise_power_dBm": Noise_Power_dBm,
         "test": test_data,
     }
@@ -220,10 +228,14 @@ def main() -> None:
     print(f"Aperture width: {Aperture_Width_MS:.3f} m")
     print(f"Fraunhofer distance: {Far_Field_Distance_M:.3f} m")
     print(f"UAV separation: {Separation_Distance_M:.3f} m")
-    broadside_reference_power_dBm = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2)
+    Broadside_h_eff = Fixed_Link_Field_Gain * alpha
+    Broadside_Signal_Power_W = Transmit_Power_W * np.abs(Broadside_h_eff) ** 2
+    Broadside_SNR_Linear = Broadside_Signal_Power_W / Noise_Power_W
     print(f"Transmit power: {Transmit_Power_dBm:.1f} dBm")
     print(f"Physical receiver-noise power: {Noise_Power_dBm:.3f} dBm")
-    print(f"Derived broadside-reference SNR: {broadside_reference_power_dBm - Noise_Power_dBm:.3f} dB")
+    print(f"Broadside clean received power: {10 * np.log10(Broadside_Signal_Power_W) + 30:.3f} dBm")
+    print(f"Broadside theoretical SNR: {10 * np.log10(Broadside_SNR_Linear):.3f} dB")
+    print(f"CE pilot symbols per candidate: {pilot_symbols_per_candidate}")
 
     # ---------- 11. 各模块直接绘制自己负责的数据 ----------
     plt.rcParams.update({"figure.dpi": 100, "axes.grid": True, "grid.alpha": 0.25, "font.size": 10})
@@ -234,9 +246,9 @@ def main() -> None:
 
     # CE是主程序核心，因此最后一张CE概率图也直接在main()中绘制。
     figure, axes = plt.subplots(1, 2, figsize=(8.4, 3.2))
-    iteration = np.arange(1, test_data["measured_history_dBm"].size + 1)
-    axes[0].plot(iteration, test_data["measured_history_dBm"], "-o", ms=3.5, color="#d95f02")
-    axes[0].set(xlabel="CE iteration", ylabel="Noisy incumbent power (dBm)", title="(a) Measured CE history")
+    iteration = np.arange(1, test_data["estimated_snr_history_dB"].size + 1)
+    axes[0].plot(iteration, test_data["estimated_snr_history_dB"], "-o", ms=3.5, color="#d95f02")
+    axes[0].set(xlabel="CE iteration", ylabel="Estimated SNR (dB)", title="(a) Pilot-based CE history")
     axes[1].plot(iteration, test_data["confidence_history"], "-o", ms=3.5, color="#7570b3")
     axes[1].axhline(convergence_probability, color="0.35", linestyle="--", label="Threshold")
     axes[1].set(xlabel="CE iteration", ylabel="Mean maximum probability", ylim=(0.2, 1.02),

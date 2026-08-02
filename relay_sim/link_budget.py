@@ -1,4 +1,4 @@
-"""RoF链路、接收功率、噪声以及总体结果绘图。"""
+"""RoF链路、统一等效信道、接收功率、理论SNR以及总体结果绘图。"""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -6,41 +6,49 @@ import numpy as np
 from .channel import Separation_Distance_M
 from .metasurface import Columns, Element_Field_Exponent
 
-# 本文件只保存链路预算所需参数；dB量在计算时直接转成线性值，不再调用单位转换函数。
+# 发射功率只在统一模型y=sqrt(Pt)*h_eff*s+n中出现一次。
 Transmit_Power_dBm = 15
+Transmit_Power_W = 10 ** ((Transmit_Power_dBm - 30) / 10)
 MS1_Broadside_Gain_dBi = 15.0
 MS2_Broadside_Gain_dBi = 15.0
 Total_RoF_Gain_dB = -20.0
 Receiver_Misc_Gain_dB = -3
-Base_Power_dBm = Transmit_Power_dBm + MS1_Broadside_Gain_dBi + MS2_Broadside_Gain_dBi + Total_RoF_Gain_dB + Receiver_Misc_Gain_dB
+
+# 固定增益不包含发射功率和Friis传播系数；功率增益开平方后才能乘到复信道场上。
+Fixed_Link_Power_Gain_dB = MS1_Broadside_Gain_dBi + MS2_Broadside_Gain_dBi + Total_RoF_Gain_dB + Receiver_Misc_Gain_dB
+Fixed_Link_Field_Gain = np.sqrt(10 ** (Fixed_Link_Power_Gain_dB / 10))
 
 # 接收机噪声由Pn=-174+10log10(B)+NF计算；SNR由接收功率减去噪声功率得到。
 Receiver_Bandwidth_Hz = 20e6
 Receiver_Noise_Figure_dB = 7.0
 Noise_Power_dBm = -174.0 + 10 * np.log10(Receiver_Bandwidth_Hz) + Receiver_Noise_Figure_dB
+Noise_Power_W = 10 ** ((Noise_Power_dBm - 30) / 10)
 
 
-def received_power_dBm(v1: np.ndarray, v2: np.ndarray, angle_rad: float,
-                       h12: np.ndarray, alpha: complex) -> float:
-    """根据双端补偿相位匹配、扫描损耗、Friis损耗和RoF损耗计算接收功率。"""
+def link_metrics(v1: np.ndarray, v2: np.ndarray, angle_rad: float,
+                 h12: np.ndarray) -> tuple[complex, float, float]:
+    """按照y=sqrt(Pt)*h_eff*s+n返回等效信道、无噪接收功率和理论SNR。"""
 
-    # v2^H*H12*v1是两块超表面之间的等效复信道。
-    h_eff = np.vdot(v2, h12 @ v1)
+    # v2^H*H12*v1包含双端列阵相干叠加和H12中的Friis复系数。
+    Air_Channel = np.vdot(v2, h12 @ v1)
 
-    # 连续补偿相位完全匹配时，等效功率为|alpha|²*N1²*N2²；二者之比限制在0至1。
-    ideal_power = np.abs(alpha) ** 2 * Columns**4
-    beam_matching = np.clip(np.abs(h_eff) ** 2 / ideal_power, 1e-5, 1.0)
+    # 除以N1*N2，把列阵相干增益归一化；阵面的实际宽边增益已由上面的dBi参数给出。
+    Normalized_Air_Channel = Air_Channel / Columns**2
 
-    # 只考虑-90°至90°。每块超表面的场因子为cos(theta)^q，转换成功率后为cos(theta)^(2q)；
-    # 收发两块超表面的功率因子相乘，因此双端链路总扫描因子为cos(theta)^(4q)。
-    scan_product = np.cos(angle_rad) ** (4 * Element_Field_Exponent)
+    # 单块MS的单元场方向图为cos(theta)^q；双端场系数相乘后为cos(theta)^(2q)。
+    Scan_Field_Factor = np.cos(angle_rad) ** (2 * Element_Field_Exponent)
 
-    # dB增益直接相加等价于线性增益相乘；最后仍以dBm输出。
-    return float(Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2 * beam_matching * scan_product))
+    # 统一等效信道包含固定RoF/天线增益、空中Friis传播、双端相位匹配和扫描损耗。
+    h_eff = Fixed_Link_Field_Gain * Normalized_Air_Channel * Scan_Field_Factor
+
+    # s已归一化为E[|s|²]=1，因此无噪信号功率为Pt*|h_eff|²，理论SNR为该功率除以噪声方差。
+    Signal_Power_W = Transmit_Power_W * np.abs(h_eff) ** 2
+    Theoretical_SNR_Linear = Signal_Power_W / Noise_Power_W
+    return complex(h_eff), float(Signal_Power_W), float(Theoretical_SNR_Linear)
 
 
 def plot_link_results(results: dict) -> None:
-    """绘制轨迹、接收功率、SNR和含噪CE历史最优。"""
+    """绘制轨迹、无噪接收信号功率、理论SNR和CE估计SNR历史。"""
 
     angles = results["angles_deg"]
     radius = Separation_Distance_M
@@ -65,20 +73,20 @@ def plot_link_results(results: dict) -> None:
                    title="(b) Aerial-link received power")
     axes[0, 1].legend(loc="best")
 
-    # 图(c)：SNR等于无噪接收信号功率减去固定的物理接收机噪声功率。
+    # 图(c)：理论SNR严格按Pt*|h_eff|²/sigma²计算，而不是由单次含噪观测计算。
     axes[1, 0].plot(angles, results["snr_known_dB"], "--o", ms=3.5, color="#1b9e77")
     axes[1, 0].plot(angles, results["snr_ce_dB"], "-o", ms=3.5, color="#7570b3")
     axes[1, 0].set(xlabel="UAV2 azimuth psi (deg)", ylabel="SNR (dB)",
-                   title=f"(c) Derived SNR (physical noise={results['noise_power_dBm']:.1f} dBm)")
+                   title=f"(c) Theoretical SNR (noise={results['noise_power_dBm']:.1f} dBm)")
 
-    # 图(d)：只显示CE实际使用的含噪历史最优，并用三点移动平均帮助观察趋势。
-    measured = np.asarray(results["test"]["measured_history_dBm"])
+    # 图(d)：CE用多枚含噪导频估计SNR；移动平均只帮助观察趋势，不参与优化。
+    measured = np.asarray(results["test"]["estimated_snr_history_dB"])
     iteration = np.arange(1, measured.size + 1)
     moving_average = np.convolve(measured, np.ones(3) / 3, mode="valid")
-    axes[1, 1].plot(iteration, measured, "-o", ms=3.5, color="#d95f02", label="Noisy incumbent")
+    axes[1, 1].plot(iteration, measured, "-o", ms=3.5, color="#d95f02", label="Estimated-SNR incumbent")
     axes[1, 1].plot(iteration[2:], moving_average, color="#1b9e77", lw=2, label="3-point average")
-    axes[1, 1].set(xlabel="CE iteration", ylabel="Measured power (dBm)",
-                   title=f"(d) Noisy CE history at test angle psi={results['test']['angle_deg']:.0f}°")
+    axes[1, 1].set(xlabel="CE iteration", ylabel="Estimated SNR (dB)",
+                   title=f"(d) Pilot-based CE history at test angle psi={results['test']['angle_deg']:.0f}°")
     axes[1, 1].legend(loc="best")
 
     figure.suptitle("Dual UAV-borne 2-bit metasurface far-field link", fontsize=14)
