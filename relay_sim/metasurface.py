@@ -30,8 +30,8 @@ Pattern_Angles_Deg = np.arange(-90.0, 90.01, 0.1)
 Pattern_Floor_dB = -50.0
 
 
-def calculate_2bit_compensation_code(Target_Angle_Deg: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """给定偏折角，依次计算16列理想补偿相位、2-bit补偿相位和编码矩阵。"""
+def calculate_2bit_compensation_code(Target_Angle_Deg: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
+    """给定偏折角，搜索最优公共相位并返回量化后的16列2-bit编码。"""
 
     # 目标角度由度转换为弧度；Beta0已根据5.8 GHz工作频率在文件开头计算。
     Target_Angle_Rad = np.deg2rad(Target_Angle_Deg)
@@ -39,15 +39,26 @@ def calculate_2bit_compensation_code(Target_Angle_Deg: float) -> tuple[np.ndarra
     # 采用e^(jωt)约定，第n列抵消空间相位所需的理想补偿相位为φn=-β0*xn*sin(θ0)。
     Ideal_Compensation_Phase_Rad = -Beta0 * Column_Positions_MS * np.sin(Target_Angle_Rad)
 
-    # 与MATLAB的mod(phi_comp,2*pi)一致，把理想补偿相位归一化到[0,2π)。
-    Normalized_Compensation_Phase_Rad = np.mod(Ideal_Compensation_Phase_Rad, 2 * np.pi)
+    # 先保存公共相位为0时的直接量化编码，用于和公共相位优化结果比较。
+    Direct_Normalized_Phase_Rad = np.mod(Ideal_Compensation_Phase_Rad, 2 * np.pi)
+    Direct_Coding_Matrix = np.floor((Direct_Normalized_Phase_Rad + np.pi / 4) / (np.pi / 2)).astype(int) % 4
 
-    # 以45°、135°、225°、315°为分界，量化到最近的0°、90°、180°、270°。
-    # Coding_Matrix中的状态0、1、2、3分别对应0°、90°、180°、270°补偿相位。
-    Coding_Matrix = np.floor((Normalized_Compensation_Phase_Rad + np.pi / 4) / (np.pi / 2)).astype(int) % 4
+    # 连续相位整体增加同一个公共相位不会改变波束方向，但会改变2-bit量化误差。
+    # 在一个90°量化周期内以0.25°间隔搜索公共相位，并同时生成所有候选编码矩阵。
+    Common_Phase_Candidates_Rad = np.deg2rad(np.arange(0.0, 90.0, 0.25))
+    Candidate_Phases_Rad = Ideal_Compensation_Phase_Rad[None, :] + Common_Phase_Candidates_Rad[:, None]
+    Candidate_Coding_Matrices = np.floor((np.mod(Candidate_Phases_Rad, 2 * np.pi) + np.pi / 4) / (np.pi / 2)).astype(int) % 4
+
+    # 对每个候选编码计算目标方向的相干叠加功率；误差相位越集中，叠加功率越大。
+    Candidate_Phasors = Compensation_Phasors[Candidate_Coding_Matrices]
+    Ideal_Phasors = np.exp(1j * Ideal_Compensation_Phase_Rad)
+    Coherent_Powers = np.abs(np.sum(np.conj(Ideal_Phasors)[None, :] * Candidate_Phasors, axis=1)) ** 2
+    Best_Common_Phase_Index = int(np.argmax(Coherent_Powers))
+    Optimal_Common_Phase_Rad = float(Common_Phase_Candidates_Rad[Best_Common_Phase_Index])
+    Coding_Matrix = Candidate_Coding_Matrices[Best_Common_Phase_Index]
     Quantized_Compensation_Phase_Rad = Compensation_Phase_States_Rad[Coding_Matrix]
 
-    return Ideal_Compensation_Phase_Rad, Quantized_Compensation_Phase_Rad, Coding_Matrix
+    return Ideal_Compensation_Phase_Rad, Quantized_Compensation_Phase_Rad, Coding_Matrix, Optimal_Common_Phase_Rad, Direct_Coding_Matrix
 
 
 def direction_pattern_dB(Coding_Matrix: np.ndarray) -> np.ndarray:
@@ -114,12 +125,12 @@ def plot_patterns(test_data: dict) -> None:
         (axes[0, 0], MS1_Known_Pattern, MS1_CE_Pattern, "(a) MS1 transmit pattern"),
         (axes[0, 1], MS2_Known_Pattern, MS2_CE_Pattern, "(b) MS2 receive pattern"),
     ]:
-        ax.plot(Pattern_Angles_Deg, known, "--", color="#1b9e77", label="Known-angle 2-bit")
+        ax.plot(Pattern_Angles_Deg, known, "--", color="#1b9e77", label="Known-angle optimized 2-bit")
         ax.plot(Pattern_Angles_Deg, ce, "-", color="#7570b3", label="Blind CE")
         ax.axvline(test_data["angle_deg"], color="#d95f02", linestyle="-.", label="Test direction")
         ax.set(xlim=(-90, 90), ylim=(Pattern_Floor_dB, 1), xlabel="Local azimuth (deg)",
                ylabel="Gain relative to broadside (dB)", title=title)
-        ax.legend(loc="upper right")
+        ax.legend(loc="lower right")
 
     # 下排把16列状态复制为2行，直观显示实际2×16列控偏置分布。
     for ax, Coding_Matrix, title in [

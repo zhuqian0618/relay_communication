@@ -34,7 +34,7 @@ def main() -> None:
     """按19个方位角完成双超表面链路仿真并显示全部结果。"""
 
     # ---------- 1. 实验扫描参数：只在本主程序中使用 ----------
-    angles_deg = np.arange(-45.0, 45.01, 5.0)
+    angles_deg = np.arange(-60.0, 60.01, 5.0)
     test_angle_deg = 25.0
 
     # ---------- 2. CE参数：算法是本文件核心，因此不再放入其他模块 ----------
@@ -69,8 +69,8 @@ def main() -> None:
         reference_power_dBm = Base_Power_dBm + 10 * np.log10(np.abs(alpha) ** 2)
         noise_power_normalized = 10 ** ((Noise_Power_dBm - reference_power_dBm) / 10)
 
-        # 已知角度方案：按“理想补偿相位→归一化→2-bit量化”的顺序计算两块板的16列编码。
-        ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1 = calculate_2bit_compensation_code(angle_deg)
+        # 已知角度方案：搜索公共相位，使2-bit量化后的目标方向相干叠加功率最大。
+        ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1, optimal_common_phase_rad, Direct_Coding_Matrix = calculate_2bit_compensation_code(angle_deg)
 
         # 两块MS的列编号和直流偏置设计一致，因此已知角度时直接使用相同编码矩阵。
         ideal_compensation_phase2 = ideal_compensation_phase1.copy()
@@ -191,6 +191,8 @@ def main() -> None:
                 "ideal_compensation_phase2": ideal_compensation_phase2.copy(),
                 "quantized_compensation_phase1": quantized_compensation_phase1.copy(),
                 "quantized_compensation_phase2": quantized_compensation_phase2.copy(),
+                "optimal_common_phase_deg": float(np.rad2deg(optimal_common_phase_rad)),
+                "Direct_Coding_Matrix": Direct_Coding_Matrix.copy(),
                 "CE_Optimal_Matrix_MS1": CE_Optimal_Matrix_MS1.copy(),
                 "CE_Optimal_Matrix_MS2": CE_Optimal_Matrix_MS2.copy(),
                 "measured_history_dBm": np.asarray(measured_history),

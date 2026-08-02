@@ -58,7 +58,7 @@ def plot_link_results(results: dict) -> None:
 
     # 图(b)：两条曲线分别对应已知角度2-bit码本和未知CSI盲CE。
     axes[0, 1].plot(angles, results["power_known_dBm"], "--o", ms=3.5,
-                    color="#1b9e77", label="Known-angle dual 2-bit")
+                    color="#1b9e77", label="Known-angle optimized 2-bit")
     axes[0, 1].plot(angles, results["power_ce_dBm"], "-o", ms=3.5,
                     color="#7570b3", label="Unknown-CSI blind CE")
     axes[0, 1].set(xlabel="UAV2 azimuth psi (deg)", ylabel="Received power (dBm)",
