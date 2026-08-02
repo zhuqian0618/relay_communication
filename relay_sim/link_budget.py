@@ -7,14 +7,14 @@ from .channel import Separation_Distance_M
 from .metasurface import Columns, Element_Field_Exponent
 
 # 本文件只保存链路预算所需参数；dB量在计算时直接转成线性值，不再调用单位转换函数。
-Transmit_Power_dBm = 0
+Transmit_Power_dBm = 15
 MS1_Broadside_Gain_dBi = 15.0
 MS2_Broadside_Gain_dBi = 15.0
 Total_RoF_Gain_dB = -20.0
 Receiver_Misc_Gain_dB = -3
 Base_Power_dBm = Transmit_Power_dBm + MS1_Broadside_Gain_dBi + MS2_Broadside_Gain_dBi + Total_RoF_Gain_dB + Receiver_Misc_Gain_dB
 
-# 接收机噪声由Pn=-174+10log10(B)+NF计算；SNR不再作为输入，而由接收功率减去噪声功率得到。
+# 接收机噪声由Pn=-174+10log10(B)+NF计算；SNR由接收功率减去噪声功率得到。
 Receiver_Bandwidth_Hz = 20e6
 Receiver_Noise_Figure_dB = 7.0
 Noise_Power_dBm = -174.0 + 10 * np.log10(Receiver_Bandwidth_Hz) + Receiver_Noise_Figure_dB
