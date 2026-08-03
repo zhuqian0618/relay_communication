@@ -10,6 +10,22 @@ Separation_Distance_M = 6.5
 Aperture_Width_MS = Columns * Period_MS
 Far_Field_Distance_M = 2 * Aperture_Width_MS**2 / Lambda
 
+# 发射功率只在统一模型y=sqrt(Pt)*h_eff*s+n中出现一次。
+Transmit_Power_dBm = 15
+Transmit_Power_W = 10 ** ((Transmit_Power_dBm - 30) / 10)
+MS1_Broadside_Gain_dBi = 15.0
+MS2_Broadside_Gain_dBi = 15.0
+Total_RoF_Gain_dB = -20.0
+Receiver_Misc_Gain_dB = -3
+
+# 固定增益不包含发射功率和Friis传播系数；功率增益开平方后才能乘到复信道场上。
+Fixed_Link_Power_Gain_dB = MS1_Broadside_Gain_dBi + MS2_Broadside_Gain_dBi + Total_RoF_Gain_dB + Receiver_Misc_Gain_dB
+Fixed_Link_Field_Gain = np.sqrt(10 ** (Fixed_Link_Power_Gain_dB / 10))
+
+# 直接给定接收端总噪声功率sigma²；后续生成训练数据时只需修改该变量。
+Noise_Power_dBm = -90.0
+Noise_Power_W = 10 ** ((Noise_Power_dBm - 30) / 10)
+
 
 def build_far_field_channel(angle_rad: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, complex]:
     """构造同一水平面、固定距离、单径LoS条件下的16×16远场信道矩阵。"""
@@ -26,22 +42,6 @@ def build_far_field_channel(angle_rad: float) -> tuple[np.ndarray, np.ndarray, n
     # 远场单径LoS信道为接收空间响应和发射空间响应共轭转置的外积，因此理论秩为1。
     h12 = alpha * np.outer(a2, np.conj(a1))
     return h12, a1, a2, complex(alpha)
-
-# 发射功率只在统一模型y=sqrt(Pt)*h_eff*s+n中出现一次。
-Transmit_Power_dBm = 15
-Transmit_Power_W = 10 ** ((Transmit_Power_dBm - 30) / 10)
-MS1_Broadside_Gain_dBi = 15.0
-MS2_Broadside_Gain_dBi = 15.0
-Total_RoF_Gain_dB = -20.0
-Receiver_Misc_Gain_dB = -3
-
-# 固定增益不包含发射功率和Friis传播系数；功率增益开平方后才能乘到复信道场上。
-Fixed_Link_Power_Gain_dB = MS1_Broadside_Gain_dBi + MS2_Broadside_Gain_dBi + Total_RoF_Gain_dB + Receiver_Misc_Gain_dB
-Fixed_Link_Field_Gain = np.sqrt(10 ** (Fixed_Link_Power_Gain_dB / 10))
-
-# 直接给定接收端总噪声功率sigma²；后续生成训练数据时只需修改该变量。
-Noise_Power_dBm = -90.0
-Noise_Power_W = 10 ** ((Noise_Power_dBm - 30) / 10)
 
 
 def link_metrics(v1: np.ndarray, v2: np.ndarray, angle_rad: float,
@@ -67,7 +67,7 @@ def link_metrics(v1: np.ndarray, v2: np.ndarray, angle_rad: float,
 
 
 def plot_link_results(results: dict) -> None:
-    """绘制轨迹、无噪接收信号功率、理论SNR和CE估计SNR历史。"""
+    """绘制轨迹、无噪接收信号功率、理论SNR和CE理论SNR历史。"""
 
     angles = results["angles_deg"]
     radius = Separation_Distance_M
@@ -98,15 +98,12 @@ def plot_link_results(results: dict) -> None:
     axes[1, 0].set(xlabel="UAV2 azimuth psi (deg)", ylabel="SNR (dB)",
                    title=f"(c) Theoretical SNR (noise={results['noise_power_dBm']:.1f} dBm)")
 
-    # 图(d)：CE用多枚含噪导频估计SNR；移动平均只帮助观察趋势，不参与优化。
-    measured = np.asarray(results["test"]["estimated_snr_history_dB"])
-    iteration = np.arange(1, measured.size + 1)
-    moving_average = np.convolve(measured, np.ones(3) / 3, mode="valid")
-    axes[1, 1].plot(iteration, measured, "-o", ms=3.5, color="#d95f02", label="Estimated-SNR incumbent")
-    axes[1, 1].plot(iteration[2:], moving_average, color="#1b9e77", lw=2, label="3-point average")
-    axes[1, 1].set(xlabel="CE iteration", ylabel="Estimated SNR (dB)",
-                   title=f"(d) Pilot-based CE history at test angle psi={results['test']['angle_deg']:.0f}°")
-    axes[1, 1].legend(loc="best")
+    # 图(d)：每轮历史最优值均按Pt*|h_eff|²/sigma²直接计算，不含导频或随机噪声采样。
+    theoretical = np.asarray(results["test"]["theoretical_snr_history_dB"])
+    iteration = np.arange(1, theoretical.size + 1)
+    axes[1, 1].plot(iteration, theoretical, "-o", ms=3.5, color="#d95f02")
+    axes[1, 1].set(xlabel="CE iteration", ylabel="Theoretical SNR (dB)",
+                   title=f"(d) Theoretical-SNR CE history at test angle psi={results['test']['angle_deg']:.0f}°")
 
     figure.suptitle("Dual UAV-borne 2-bit metasurface far-field link", fontsize=14)
     figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))

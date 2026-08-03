@@ -44,8 +44,6 @@ def main() -> None:
     elite_fraction = 0.15
     smoothing = 0.65
     minimum_probability = 0.01
-    pilot_symbols_per_candidate = 16
-    final_verification_pilot_symbols = 64
     convergence_probability = 0.95
     rng = np.random.default_rng(20260724)
 
@@ -91,10 +89,10 @@ def main() -> None:
         for fixed in fixed_variables:
             probability[fixed] = [1.0, 0.0, 0.0, 0.0]
 
-        # incumbent保存导频估计SNR意义下截至当前最好的联合码本。
+        # incumbent保存理论SNR意义下截至当前最好的联合码本；CE只接收SNR标量，不使用信道矩阵。
         incumbent = np.zeros(variable_count, dtype=int)
-        incumbent_score = -np.inf
-        estimated_snr_history, confidence_history = [], []
+        incumbent_snr_linear = -np.inf
+        theoretical_snr_history_dB, confidence_history = [], []
 
         # ---------- 6. CE迭代：采样 → 测量 → Elite → 更新概率 ----------
         for iteration in range(max_iterations):
@@ -105,7 +103,7 @@ def main() -> None:
                 samples[:, variable] = rng.choice(state_count, population_size, p=probability[variable])
 
             # 保留历史最优解和当前概率众数，避免优秀码本在随机采样中丢失。
-            if np.isfinite(incumbent_score):
+            if np.isfinite(incumbent_snr_linear):
                 samples[0] = incumbent
             samples[1] = np.argmax(probability, axis=1)
             samples[:, fixed_variables] = 0
@@ -119,26 +117,19 @@ def main() -> None:
             Scan_Field_Factor = np.cos(angle_rad) ** (2 * Element_Field_Exponent)
             h_eff_batch = Fixed_Link_Field_Gain * Air_Channels / Columns**2 * Scan_Field_Factor
 
-            # 采用统一模型y=sqrt(Pt)*h_eff*s+n。导频s=1且E[|s|²]=1，n为方差sigma²的复AWGN。
-            # 每个候选重复发送16枚导频，用平均|y|²估计总功率，再减去已知噪声功率得到有用信号功率。
-            noise = np.sqrt(Noise_Power_W / 2) * (
-                rng.normal(size=(pilot_symbols_per_candidate, population_size))
-                + 1j * rng.normal(size=(pilot_symbols_per_candidate, population_size))
-            )
-            received_pilots = np.sqrt(Transmit_Power_W) * h_eff_batch[None, :] + noise
-            estimated_total_power_W = np.mean(np.abs(received_pilots) ** 2, axis=0)
-            estimated_signal_power_W = np.maximum(estimated_total_power_W - Noise_Power_W, 1e-30)
-            estimated_snr_scores_dB = 10 * np.log10(estimated_signal_power_W / Noise_Power_W)
+            # 按Chen 2024和Bin 2026的数值仿真方法，直接计算理论SNR=Pt*|h_eff|²/sigma²。
+            # 仿真环境用信道计算反馈，但CE只获得每个候选的SNR标量，因此优化过程仍属于未知CSI盲优化。
+            theoretical_snr_scores = Transmit_Power_W * np.abs(h_eff_batch) ** 2 / Noise_Power_W
 
-            # 如果本代出现更高的导频估计SNR，就更新历史最优码本。
-            best_index = int(np.argmax(estimated_snr_scores_dB))
-            if estimated_snr_scores_dB[best_index] > incumbent_score:
-                incumbent_score = float(estimated_snr_scores_dB[best_index])
+            # 如果本代出现更高的理论SNR，就更新历史最优联合码本。
+            best_index = int(np.argmax(theoretical_snr_scores))
+            if theoretical_snr_scores[best_index] > incumbent_snr_linear:
+                incumbent_snr_linear = float(theoretical_snr_scores[best_index])
                 incumbent = samples[best_index].copy()
 
-            # 取估计SNR最高的前15%样本，并统计每个变量中四种补偿相位的出现频率。
+            # 取理论SNR最高的前15%样本，并统计每个变量中四种补偿相位的出现频率。
             elite_count = max(2, int(np.ceil(elite_fraction * population_size)))
-            elite_samples = samples[np.argsort(estimated_snr_scores_dB)[-elite_count:]]
+            elite_samples = samples[np.argsort(theoretical_snr_scores)[-elite_count:]]
             elite_probability = np.column_stack([(elite_samples == state).mean(axis=0) for state in range(state_count)])
 
             # 用平滑系数更新概率，同时保留最小探索概率，防止过早锁死。
@@ -148,8 +139,8 @@ def main() -> None:
             for fixed in fixed_variables:
                 probability[fixed] = [1.0, 0.0, 0.0, 0.0]
 
-            # 记录CE真正看到的估计SNR历史最优与当前平均置信度。
-            estimated_snr_history.append(incumbent_score)
+            # 记录CE真正看到的理论SNR历史最优与当前平均置信度。
+            theoretical_snr_history_dB.append(10 * np.log10(max(incumbent_snr_linear, 1e-30)))
             mask = np.ones(variable_count, dtype=bool)
             mask[list(fixed_variables)] = False
             confidence_history.append(np.max(probability[mask], axis=1).mean())
@@ -161,7 +152,7 @@ def main() -> None:
                     "probability": probability.copy(),
                     "Coding_Matrix_MS1": incumbent[:Columns].copy(),
                     "Coding_Matrix_MS2": incumbent[Columns:].copy(),
-                    "estimated_snr_dB": float(incumbent_score),
+                    "theoretical_snr_dB": float(theoretical_snr_history_dB[-1]),
                 })
 
             # 当全部非固定变量的最大概率都超过阈值时提前停止。
@@ -169,7 +160,7 @@ def main() -> None:
                     and np.all(np.max(probability[mask], axis=1) >= convergence_probability)):
                 break
 
-        # ---------- 7. 最终复测：比较历史最优与概率众数 ----------
+        # ---------- 7. 最终选择：用同一理论SNR比较历史最优与概率众数 ----------
         mode = np.argmax(probability, axis=1)
         mode[list(fixed_variables)] = 0
         final_candidates = np.stack([incumbent, mode])
@@ -178,28 +169,21 @@ def main() -> None:
         candidate_air_channels = np.einsum("mi,ij,mj->m", np.conj(candidate_v2), h12, candidate_v1, optimize=True)
         candidate_h_eff = Fixed_Link_Field_Gain * candidate_air_channels / Columns**2 * Scan_Field_Factor
 
-        # 对历史最优和概率众数各发送64枚导频，以同一个SNR估计公式完成最终复测。
-        final_noise = np.sqrt(Noise_Power_W / 2) * (
-            rng.normal(size=(final_verification_pilot_symbols, 2))
-            + 1j * rng.normal(size=(final_verification_pilot_symbols, 2))
-        )
-        final_received_pilots = np.sqrt(Transmit_Power_W) * candidate_h_eff[None, :] + final_noise
-        final_total_power_W = np.mean(np.abs(final_received_pilots) ** 2, axis=0)
-        final_signal_power_W = np.maximum(final_total_power_W - Noise_Power_W, 1e-30)
-        final_estimated_snr = final_signal_power_W / Noise_Power_W
-        best_indices = final_candidates[int(np.argmax(final_estimated_snr))]
+        # 理论SNR评价是确定性的，不再需要导频复测或随机噪声采样。
+        final_theoretical_snr = Transmit_Power_W * np.abs(candidate_h_eff) ** 2 / Noise_Power_W
+        best_indices = final_candidates[int(np.argmax(final_theoretical_snr))]
         CE_Optimal_Matrix_MS1, CE_Optimal_Matrix_MS2 = best_indices[:Columns], best_indices[Columns:]
         CE_v1 = Compensation_Phasors[CE_Optimal_Matrix_MS1]
         CE_v2 = Compensation_Phasors[CE_Optimal_Matrix_MS2]
 
-        # 最后一帧采用复测后真正选定的联合编码，保证演化图终点与其余结果图完全一致。
+        # 最后一帧采用理论SNR选定的联合编码，保证演化图终点与其余结果图完全一致。
         if is_test_angle:
             final_snapshot = {
-                "iteration": len(estimated_snr_history),
+                "iteration": len(theoretical_snr_history_dB),
                 "probability": probability.copy(),
                 "Coding_Matrix_MS1": CE_Optimal_Matrix_MS1.copy(),
                 "Coding_Matrix_MS2": CE_Optimal_Matrix_MS2.copy(),
-                "estimated_snr_dB": float(10 * np.log10(max(float(np.max(final_estimated_snr)), 1e-30))),
+                "theoretical_snr_dB": float(10 * np.log10(max(float(np.max(final_theoretical_snr)), 1e-30))),
             }
             if ce_iteration_snapshots:
                 ce_iteration_snapshots[-1] = final_snapshot
@@ -230,13 +214,12 @@ def main() -> None:
                 "Direct_Coding_Matrix": Direct_Coding_Matrix.copy(),
                 "CE_Optimal_Matrix_MS1": CE_Optimal_Matrix_MS1.copy(),
                 "CE_Optimal_Matrix_MS2": CE_Optimal_Matrix_MS2.copy(),
-                "estimated_snr_history_dB": np.asarray(estimated_snr_history),
+                "theoretical_snr_history_dB": np.asarray(theoretical_snr_history_dB),
                 "confidence_history": np.asarray(confidence_history),
                 "final_probability": probability.copy(),
                 "ce_iteration_snapshots": ce_iteration_snapshots,
                 "ce_visualization_iterations": ce_visualization_iterations,
                 "noise_power_dBm": Noise_Power_dBm,
-                "pilot_symbols_per_candidate": pilot_symbols_per_candidate,
             }
 
     # ---------- 9. 整理绘图需要的数组 ----------
@@ -265,7 +248,7 @@ def main() -> None:
     print(f"Directly specified noise power sigma^2: {Noise_Power_dBm:.3f} dBm")
     print(f"Broadside clean received power: {10 * np.log10(Broadside_Signal_Power_W) + 30:.3f} dBm")
     print(f"Broadside theoretical SNR: {10 * np.log10(Broadside_SNR_Linear):.3f} dB")
-    print(f"CE pilot symbols per candidate: {pilot_symbols_per_candidate}")
+    print("CE objective: theoretical SNR = Pt * |h_eff|^2 / sigma^2")
 
     # ---------- 11. 各模块直接绘制自己负责的数据 ----------
     plt.rcParams.update({"figure.dpi": 100, "axes.grid": True, "grid.alpha": 0.25, "font.size": 10})
@@ -276,9 +259,9 @@ def main() -> None:
 
     # CE是主程序核心，因此最后一张CE概率图也直接在main()中绘制。
     figure, axes = plt.subplots(1, 2, figsize=(8.4, 3.2))
-    iteration = np.arange(1, test_data["estimated_snr_history_dB"].size + 1)
-    axes[0].plot(iteration, test_data["estimated_snr_history_dB"], "-o", ms=3.5, color="#d95f02")
-    axes[0].set(xlabel="CE iteration", ylabel="Estimated SNR (dB)", title="(a) Pilot-based CE history")
+    iteration = np.arange(1, test_data["theoretical_snr_history_dB"].size + 1)
+    axes[0].plot(iteration, test_data["theoretical_snr_history_dB"], "-o", ms=3.5, color="#d95f02")
+    axes[0].set(xlabel="CE iteration", ylabel="Theoretical SNR (dB)", title="(a) Theoretical-SNR CE history")
     axes[1].plot(iteration, test_data["confidence_history"], "-o", ms=3.5, color="#7570b3")
     axes[1].axhline(convergence_probability, color="0.35", linestyle="--", label="Threshold")
     axes[1].set(xlabel="CE iteration", ylabel="Mean maximum probability", ylim=(0.2, 1.02),
