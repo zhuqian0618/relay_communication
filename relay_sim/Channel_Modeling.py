@@ -11,7 +11,7 @@ Aperture_Width_MS = Columns * Period_MS
 Far_Field_Distance_M = 2 * Aperture_Width_MS**2 / Lambda
 
 # 发射功率只在统一模型y=sqrt(Pt)*h_eff*s+n中出现一次。
-Transmit_Power_dBm = 15
+Transmit_Power_dBm = -15
 Transmit_Power_W = 10 ** ((Transmit_Power_dBm - 30) / 10)
 MS1_Broadside_Gain_dBi = 15.0
 MS2_Broadside_Gain_dBi = 15.0
@@ -23,7 +23,7 @@ Fixed_Link_Power_Gain_dB = MS1_Broadside_Gain_dBi + MS2_Broadside_Gain_dBi + Tot
 Fixed_Link_Field_Gain = np.sqrt(10 ** (Fixed_Link_Power_Gain_dB / 10))
 
 # 直接给定接收端总噪声功率sigma²；后续生成训练数据时只需修改该变量。
-Noise_Power_dBm = -90.0
+Noise_Power_dBm = -60.0
 Noise_Power_W = 10 ** ((Noise_Power_dBm - 30) / 10)
 
 
@@ -67,7 +67,7 @@ def link_metrics(v1: np.ndarray, v2: np.ndarray, angle_rad: float,
 
 
 def plot_link_results(results: dict) -> None:
-    """绘制轨迹、无噪接收信号功率、理论SNR和CE理论SNR历史。"""
+    """绘制轨迹、无噪接收信号功率、理论SNR和CE导频估计SNR历史。"""
 
     angles = results["angles_deg"]
     radius = Separation_Distance_M
@@ -98,12 +98,15 @@ def plot_link_results(results: dict) -> None:
     axes[1, 0].set(xlabel="UAV2 azimuth psi (deg)", ylabel="SNR (dB)",
                    title=f"(c) Theoretical SNR (noise={results['noise_power_dBm']:.1f} dBm)")
 
-    # 图(d)：每轮历史最优值均按Pt*|h_eff|²/sigma²直接计算，不含导频或随机噪声采样。
-    theoretical = np.asarray(results["test"]["theoretical_snr_history_dB"])
-    iteration = np.arange(1, theoretical.size + 1)
-    axes[1, 1].plot(iteration, theoretical, "-o", ms=3.5, color="#d95f02")
-    axes[1, 1].set(xlabel="CE iteration", ylabel="Theoretical SNR (dB)",
-                   title=f"(d) Theoretical-SNR CE history at test angle psi={results['test']['angle_deg']:.0f}°")
+    # 图(d)：CE每轮只看到L个含噪导频给出的估计SNR；移动平均仅帮助观察趋势，不参与优化。
+    estimated = np.asarray(results["test"]["estimated_snr_history_dB"])
+    iteration = np.arange(1, estimated.size + 1)
+    moving_average = np.convolve(estimated, np.ones(3) / 3, mode="valid")
+    axes[1, 1].plot(iteration, estimated, "-o", ms=3.5, color="#d95f02", label="Estimated-SNR incumbent")
+    axes[1, 1].plot(iteration[2:], moving_average, color="#1b9e77", lw=2, label="3-point average")
+    axes[1, 1].set(xlabel="CE iteration", ylabel="Estimated SNR (dB)",
+                   title=f"(d) Pilot-based CE history at psi={results['test']['angle_deg']:.0f}°, L={results['test']['pilot_symbols_L']}")
+    axes[1, 1].legend(loc="best")
 
     figure.suptitle("Dual UAV-borne 2-bit metasurface far-field link", fontsize=14)
     figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))

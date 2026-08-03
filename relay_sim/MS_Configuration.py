@@ -176,13 +176,13 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
         axes[0, column].set_yticks(np.arange(4), ["0°", "90°", "180°", "270°"])
         figure.colorbar(image, ax=axes[0, column], fraction=0.046, pad=0.03)
 
-        # 第二行：截至该次迭代，由理论SNR反馈选出的历史最优补偿相位状态。
+        # 第二行：截至该次迭代，由L个含噪导频估计SNR选出的历史最优补偿相位状态。
         Column_Indices = np.arange(1, Columns + 1)
         axes[1, column].step(Column_Indices, Phase_States_Deg[Coding_MS1], where="mid", label="MS1")
         axes[1, column].step(Column_Indices, Phase_States_Deg[Coding_MS2], where="mid", label="MS2")
         axes[1, column].set(xlabel="Column index", ylabel="Selected phase (deg)",
                             yticks=Phase_States_Deg, ylim=(-15, 285),
-                            title=f"Best theoretical SNR = {snapshot['theoretical_snr_dB']:.2f} dB")
+                            title=f"Best estimated SNR = {snapshot['estimated_snr_dB']:.2f} dB")
         axes[1, column].legend(loc="best")
 
         # 第三行：把同一组编码代入叠加定理；主瓣逐渐指向测试角，但有限孔径旁瓣不会完全消失。
