@@ -2,6 +2,7 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import ListedColormap
 
 # 超表面工作频率为5.8 GHz；波长和自由空间相位常数在本模块统一定义，其他模块直接引用。
 Speed_Of_Light_M_S = 299_792_458.0
@@ -28,6 +29,10 @@ Element_Field_Exponent = 0.8
 # 方向图只显示水平面，绘制范围为-90°至90°。
 Pattern_Angles_Deg = np.arange(-90.0, 90.01, 0.1)
 Pattern_Floor_dB = -50.0
+
+# 四种2-bit相位采用清新、色盲友好的离散颜色；所有编码热力图和概率柱状图统一使用该配色。
+Phase_State_Colors = ["#2A82C5", "#079D63", "#E46964", "#F8CC04"]
+Phase_State_Cmap = ListedColormap(Phase_State_Colors, name="Viridis_2bit_Phases")
 
 
 def calculate_2bit_compensation_code(Target_Angle_Deg: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
@@ -62,7 +67,7 @@ def calculate_2bit_compensation_code(Target_Angle_Deg: float) -> tuple[np.ndarra
 
 
 def direction_pattern_dB(Coding_Matrix: np.ndarray) -> np.ndarray:
-    """按照叠加定理累加2行16列单元的远场，并以理想0°波束为0 dB参考。"""
+    """按照叠加定理累加2行16列单元的远场，并把当前曲线自身最大值归一化为0 dB。"""
 
     # 同一列两行使用相同量化补偿相位；该矩阵与实际2×16直流偏置分布对应。
     Quantized_Compensation_Phase_Rad = Compensation_Phase_States_Rad[np.asarray(Coding_Matrix, dtype=int)]
@@ -84,83 +89,31 @@ def direction_pattern_dB(Coding_Matrix: np.ndarray) -> np.ndarray:
     # 随后取模平方，因此单块超表面的单元功率因子自然成为cos(theta)^(2q)=cos(theta)^1.6。
     Element_Field = np.cos(np.deg2rad(Pattern_Angles_Deg)) ** Element_Field_Exponent
     Total_Fields = Fields * Element_Field
-    Relative_Power = np.abs(Total_Fields) ** 2 / (Rows * Columns) ** 2
+    Pattern_Power = np.abs(Total_Fields) ** 2
+    Relative_Power = Pattern_Power / np.max(Pattern_Power)
     Minimum_Power = 10 ** (Pattern_Floor_dB / 10)
     return 10 * np.log10(np.maximum(Relative_Power, Minimum_Power))
 
 
-def plot_ce_coding_matrices(angles_deg: np.ndarray, CE_Optimal_Matrices_MS1: np.ndarray,
-                            CE_Optimal_Matrices_MS2: np.ndarray) -> None:
-    """绘制各UAV2方位角下由CE优化得到的两块超表面2-bit编码矩阵。"""
-
-    figure, axes = plt.subplots(1, 2, figsize=(8.6, 3.2), sharey=True)
-    for ax, Coding_Matrices, title in [
-        (axes[0], CE_Optimal_Matrices_MS1, "(a) MS1 CE-optimal coding matrix"),
-        (axes[1], CE_Optimal_Matrices_MS2, "(b) MS2 CE-optimal coding matrix"),
-    ]:
-        image = ax.imshow(Coding_Matrices, origin="lower", aspect="auto", cmap="viridis", vmin=0, vmax=3,
-                          extent=[0.5, Columns + 0.5, angles_deg[0], angles_deg[-1]])
-        ax.set_xlabel("Column index")
-        ax.set_title(title)
-        colorbar = figure.colorbar(image, ax=ax, ticks=[0, 1, 2, 3])
-        colorbar.ax.set_yticklabels(["0°", "90°", "180°", "270°"])
-
-    axes[0].set_ylabel("UAV2 azimuth angle psi (deg)")
-    figure.tight_layout()
-
-
-def plot_patterns(test_data: dict) -> None:
-    """绘制测试角度下的两端方向图和CE最终2×16补偿相位热力图。"""
-
-    # 分别计算测试角度下已知角度码本与盲CE码本的方向图。
-    MS1_Known_Pattern = direction_pattern_dB(test_data["Known_Angle_Matrix_MS1"])
-    MS2_Known_Pattern = direction_pattern_dB(test_data["Known_Angle_Matrix_MS2"])
-    MS1_CE_Pattern = direction_pattern_dB(test_data["CE_Optimal_Matrix_MS1"])
-    MS2_CE_Pattern = direction_pattern_dB(test_data["CE_Optimal_Matrix_MS2"])
-
-    figure, axes = plt.subplots(2, 2, figsize=(8.6, 5.6), gridspec_kw={"height_ratios": [1.0, 0.55]})
-
-    # 上排分别显示MS1与MS2的水平面方向图。
-    for ax, known, ce, title in [
-        (axes[0, 0], MS1_Known_Pattern, MS1_CE_Pattern, "(a) MS1 transmit pattern"),
-        (axes[0, 1], MS2_Known_Pattern, MS2_CE_Pattern, "(b) MS2 receive pattern"),
-    ]:
-        ax.plot(Pattern_Angles_Deg, known, "--", color="#1b9e77", label="Known-angle optimized 2-bit")
-        ax.plot(Pattern_Angles_Deg, ce, "-", color="#7570b3", label="Blind CE")
-        ax.axvline(test_data["angle_deg"], color="#d95f02", linestyle="-.", label="Test direction")
-        ax.set(xlim=(-90, 90), ylim=(Pattern_Floor_dB, 1), xlabel="Local azimuth (deg)",
-               ylabel="Gain relative to broadside (dB)", title=title)
-        ax.legend(loc="lower right")
-
-    # 下排把16列状态复制为2行，直观显示实际2×16列控偏置分布。
-    for ax, Coding_Matrix, title in [
-        (axes[1, 0], test_data["CE_Optimal_Matrix_MS1"], "(c) MS1 CE compensation-phase map"),
-        (axes[1, 1], test_data["CE_Optimal_Matrix_MS2"], "(d) MS2 CE compensation-phase map"),
-    ]:
-        image = ax.imshow(np.tile(Coding_Matrix, (Rows, 1)), aspect="auto", cmap="viridis",
-                          vmin=-0.5, vmax=3.5, interpolation="nearest")
-        ax.set(xlabel="Column index", ylabel="Row index", title=title)
-        ax.set_xticks(np.arange(Columns), np.arange(1, Columns + 1))
-        ax.set_yticks(np.arange(Rows), np.arange(1, Rows + 1))
-        colorbar = figure.colorbar(image, ax=ax, ticks=[0, 1, 2, 3], fraction=0.045, pad=0.03)
-        colorbar.ax.set_yticklabels(["0°", "90°", "180°", "270°"])
-
-    figure.suptitle(f"Patterns and CE compensation-phase maps at test angle psi={test_data['angle_deg']:.0f}°", fontsize=12)
-    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
-
-
 def plot_ce_iteration_evolution(test_data: dict) -> None:
-    """显示用户指定的三次CE迭代所对应的概率、相位和两块MS方向图。"""
+    """每列显示一次CE迭代，并从上到下排列概率、双MS相位和方向图。"""
 
     snapshots = test_data["ce_iteration_snapshots"]
     if not snapshots:
         return
 
-    # 主函数中的ce_visualization_iterations直接决定三列子图分别显示哪一次迭代。
+    # 三列依次对应第1次、用户指定的中间时刻和最后一次迭代。
     Snapshot_By_Iteration = {snapshot["iteration"]: snapshot for snapshot in snapshots}
-    Selected_Snapshots = [Snapshot_By_Iteration[i] for i in test_data["ce_visualization_iterations"]]
-    figure, axes = plt.subplots(3, len(Selected_Snapshots), figsize=(3.7 * len(Selected_Snapshots), 7.4), squeeze=False)
-    Phase_States_Deg = np.rad2deg(Compensation_Phase_States_Rad)
+    Selected_Snapshots = [Snapshot_By_Iteration[i] for i in test_data["selected_iterations"]]
+    figure = plt.figure(figsize=(13.0, 9.2))
+    grid = figure.add_gridspec(4, 3, height_ratios=[1.55, 0.30, 0.30, 1.0])
+    figure.subplots_adjust(left=0.06, right=0.925, bottom=0.07, top=0.89, wspace=0.27, hspace=0.52)
+    Column_Tick_Positions = np.array([0, 3, 6, 9, 12, 15])
+    Column_Tick_Labels = ["1", "4", "7", "10", "13", "16"]
+    Joint_Ticks = [1, 4, 7, 10, 13, 16, 17, 20, 23, 26, 29, 32]
+    Joint_Tick_Labels = ["1", "4", "7", "10", "13", "16"] * 2
+    Known_Angle_Pattern = direction_pattern_dB(test_data["Known_Angle_Matrix_MS1"])
+    Last_Phase_Image = None
 
     for column, snapshot in enumerate(Selected_Snapshots):
         iteration = snapshot["iteration"]
@@ -168,30 +121,65 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
         Coding_MS1 = snapshot["Coding_Matrix_MS1"]
         Coding_MS2 = snapshot["Coding_Matrix_MS2"]
 
-        # 第一行：32个联合变量选择四种2-bit状态的概率；虚线分隔MS1与MS2。
-        image = axes[0, column].imshow(probability.T, origin="lower", aspect="auto", cmap="magma", vmin=0, vmax=1)
-        axes[0, column].axvline(Columns - 0.5, color="cyan", linestyle="--", linewidth=1)
-        axes[0, column].set(xlabel="Joint variable index", ylabel="Phase state",
-                            title=f"Iteration {iteration}: probability")
-        axes[0, column].set_yticks(np.arange(4), ["0°", "90°", "180°", "270°"])
-        figure.colorbar(image, ax=axes[0, column], fraction=0.046, pad=0.03)
+        # 每列顶部：用3D柱状图展示32个联合变量选择四种2-bit相位状态的概率。
+        Probability_Axis = figure.add_subplot(grid[0, column], projection="3d")
+        X = np.repeat(np.arange(1, 2 * Columns + 1), 4)
+        Y = np.tile(np.arange(4), 2 * Columns)
+        Heights = probability.reshape(-1)
+        Probability_Axis.bar3d(X - 0.32, Y - 0.28, np.zeros_like(Heights), 0.64, 0.56, Heights,
+                               color=np.tile(Phase_State_Colors, 2 * Columns), edgecolor="#C9CED6",
+                               linewidth=0.25, shade=False, alpha=0.96)
+        Probability_Axis.set(xlim=(0.3, 32.7), ylim=(-0.4, 3.7), zlim=(0, 1),
+                             xlabel="MS1: 1-16 | MS2: 1-16", ylabel="Phase state",
+                             title=f"Iteration {iteration}\nBest estimated SNR={snapshot['estimated_snr_dB']:.2f} dB")
+        Probability_Axis.set_zlabel("Probability")
+        Probability_Axis.set_xticks(Joint_Ticks, Joint_Tick_Labels, fontsize=7)
+        Probability_Axis.set_yticks(np.arange(4), ["0°", "90°", "180°", "270°"], fontsize=7)
+        Probability_Axis.view_init(elev=26, azim=-62)
+        Probability_Axis.set_box_aspect((3.2, 1.0, 0.9))
 
-        # 第二行：截至该次迭代，由L个含噪导频估计SNR选出的历史最优补偿相位状态。
-        Column_Indices = np.arange(1, Columns + 1)
-        axes[1, column].step(Column_Indices, Phase_States_Deg[Coding_MS1], where="mid", label="MS1")
-        axes[1, column].step(Column_Indices, Phase_States_Deg[Coding_MS2], where="mid", label="MS2")
-        axes[1, column].set(xlabel="Column index", ylabel="Selected phase (deg)",
-                            yticks=Phase_States_Deg, ylim=(-15, 285),
-                            title=f"Best estimated SNR = {snapshot['estimated_snr_dB']:.2f} dB")
-        axes[1, column].legend(loc="best")
+        # 去掉3D坐标轴默认的灰色面板，只保留坐标轴和浅色网格线。
+        Probability_Axis.set_facecolor("white")
+        Probability_Axis.xaxis.pane.fill = False
+        Probability_Axis.yaxis.pane.fill = False
+        Probability_Axis.zaxis.pane.fill = False
+        Probability_Axis.xaxis.pane.set_edgecolor((1, 1, 1, 0))
+        Probability_Axis.yaxis.pane.set_edgecolor((1, 1, 1, 0))
+        Probability_Axis.zaxis.pane.set_edgecolor((1, 1, 1, 0))
 
-        # 第三行：把同一组编码代入叠加定理；主瓣逐渐指向测试角，但有限孔径旁瓣不会完全消失。
-        axes[2, column].plot(Pattern_Angles_Deg, direction_pattern_dB(Coding_MS1), label="MS1")
-        axes[2, column].plot(Pattern_Angles_Deg, direction_pattern_dB(Coding_MS2), "--", label="MS2")
-        axes[2, column].axvline(test_data["angle_deg"], color="#d95f02", linestyle="-.", label="Test direction")
-        axes[2, column].set(xlim=(-90, 90), ylim=(Pattern_Floor_dB, 1), xlabel="Local azimuth (deg)",
-                            ylabel="Gain relative to broadside (dB)", title="Direction-pattern evolution")
-        axes[2, column].legend(loc="lower right")
+        # 中间两层：MS1和MS2分别使用一张较薄的2×16相位热力图。
+        for phase_row, Coding_Matrix, MS_Name in [(1, Coding_MS1, "MS1"), (2, Coding_MS2, "MS2")]:
+            Phase_Axis = figure.add_subplot(grid[phase_row, column])
+            Last_Phase_Image = Phase_Axis.imshow(np.tile(Coding_Matrix, (Rows, 1)), aspect="auto", cmap=Phase_State_Cmap,
+                                                 vmin=-0.5, vmax=3.5, interpolation="nearest")
+            Phase_Axis.set_title(f"{MS_Name} compensation-phase map", fontsize=10)
+            Phase_Axis.set_xlabel("Column index")
+            Phase_Axis.set_ylabel("Row")
+            Phase_Axis.set_xticks(Column_Tick_Positions, Column_Tick_Labels)
+            Phase_Axis.set_yticks(np.arange(Rows), np.arange(1, Rows + 1))
 
-    figure.suptitle(f"Blind-CE evolution at test angle psi={test_data['angle_deg']:.0f}°", fontsize=13)
-    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+            # 网格线位于单元边界而不是单元中心，使每个Column index明确对应一整格相位状态。
+            Phase_Axis.grid(False)
+            Phase_Axis.set_xticks(np.arange(-0.5, Columns, 1.0), minor=True)
+            Phase_Axis.set_yticks(np.arange(-0.5, Rows, 1.0), minor=True)
+            Phase_Axis.grid(which="minor", color="#C9CED6", linewidth=0.45)
+            Phase_Axis.tick_params(which="minor", bottom=False, left=False)
+
+        # 每列底部：在直角坐标系中绘制方向图；最后一次迭代额外加入已知角度参考结果。
+        Pattern_Axis = figure.add_subplot(grid[3, column])
+        Pattern_Axis.plot(Pattern_Angles_Deg, direction_pattern_dB(Coding_MS1), color="#4C78A8", label="CE MS1")
+        Pattern_Axis.plot(Pattern_Angles_Deg, direction_pattern_dB(Coding_MS2), "--", color="#E76F51", label="CE MS2")
+        if column == len(Selected_Snapshots) - 1:
+            Pattern_Axis.plot(Pattern_Angles_Deg, Known_Angle_Pattern, "-.", color="#1B9E77",
+                              label="Known-angle 2-bit")
+        Pattern_Axis.axvline(test_data["angle_deg"], color="#D95F02", linestyle=":", label="Test direction")
+        Pattern_Axis.set(xlim=(-90, 90), ylim=(Pattern_Floor_dB, 1), xlabel="theta (deg)",
+                         ylabel="Normalized pattern (dB)" if column == 0 else "",
+                         title="Normalized direction pattern")
+        Pattern_Axis.set_xticks(np.arange(-90, 91, 30))
+        Pattern_Axis.legend(loc="lower right", fontsize=8)
+
+    Colorbar_Axis = figure.add_axes([0.94, 0.34, 0.012, 0.14])
+    Colorbar = figure.colorbar(Last_Phase_Image, cax=Colorbar_Axis, ticks=[0, 1, 2, 3])
+    Colorbar.ax.set_yticklabels(["0°", "90°", "180°", "270°"])
+    figure.suptitle(f"Part II: Blind-CE evolution at selected angle theta={test_data['angle_deg']:.0f}°", fontsize=14)

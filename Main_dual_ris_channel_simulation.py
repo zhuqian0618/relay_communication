@@ -13,7 +13,6 @@ from relay_sim.Channel_Modeling import (
     Transmit_Power_W,
     Transmit_Power_dBm,
     build_far_field_channel,
-    link_metrics,
     plot_link_results,
 )
 from relay_sim.MS_Configuration import (
@@ -24,9 +23,7 @@ from relay_sim.MS_Configuration import (
     Compensation_Phasors,
     Compensation_Phase_States_Rad,
     calculate_2bit_compensation_code,
-    plot_ce_coding_matrices,
     plot_ce_iteration_evolution,
-    plot_patterns,
 )
 
 
@@ -34,24 +31,35 @@ def main() -> None:
     """按25个方位角完成双超表面链路仿真并显示全部结果。"""
 
     # ---------- 1. 实验扫描参数：只在本主程序中使用 ----------
-    angles_deg = np.arange(-60.0, 60.01, 5.0)
+    angle_start_deg = -60.0
+    angle_stop_deg = 60.0
+    angle_step_deg = 5.0
     test_angle_deg = 25.0
+
+    # 角度步长可以任意指定；终点和测试角度若不在规则采样点中，就自动补入并按升序排列。
+    if angle_step_deg <= 0:
+        raise ValueError("angle_step_deg必须大于0。")
+    angles_deg = np.arange(angle_start_deg, angle_stop_deg + 1e-12, angle_step_deg)
+    if not np.any(np.isclose(angles_deg, angle_stop_deg)):
+        angles_deg = np.append(angles_deg, angle_stop_deg)
+    if not np.any(np.isclose(angles_deg, test_angle_deg)):
+        angles_deg = np.append(angles_deg, test_angle_deg)
+    angles_deg = np.sort(angles_deg)
 
     # ---------- 2. CE参数：算法是本文件核心，因此不再放入其他模块 ----------
     population_size = 72
     max_iterations = 25
-    ce_visualization_iterations = (1, 5, 15)
+    ce_middle_iteration = 5
     elite_fraction = 0.15
     smoothing = 0.65
     minimum_probability = 0.01
     pilot_symbols_L = 16
-    final_verification_pilot_symbols_L = 64
     convergence_probability = 0.95
     rng = np.random.default_rng(20260724)
 
-    # 三个编号均从1开始且不能超过最大迭代次数；修改上面的元组即可指定希望观察的时刻。
-    if len(ce_visualization_iterations) != 3 or any(i < 1 or i > max_iterations for i in ce_visualization_iterations):
-        raise ValueError("ce_visualization_iterations必须包含三个1至max_iterations之间的迭代编号。")
+    # 迭代演化图固定展示第1次、用户指定的中间一次和最后一次；这里只需修改这个中间编号。
+    if not 1 < ce_middle_iteration < max_iterations:
+        raise ValueError("ce_middle_iteration必须位于第1次与最后一次迭代之间。")
 
     # 两块MS各有16列、每列4种状态，所以联合概率矩阵大小为32×4。
     variable_count, state_count = 2 * Columns, Compensation_Phase_States_Rad.size
@@ -60,28 +68,26 @@ def main() -> None:
     fixed_variables = (0, Columns)
 
     # ---------- 3. 为角度扫描结果分配列表 ----------
-    power_known_dBm, power_ce_dBm = [], []
-    snr_known_dB, snr_ce_dB = [], []
+    noisy_power_ce_dBm, estimated_snr_ce_dB = [], []
     CE_Optimal_Matrices_MS1, CE_Optimal_Matrices_MS2 = [], []
     test_data = None
 
-    # ---------- 4. 逐个方位角建立信道并运行两种方案 ----------
+    # ---------- 4. 逐个方位角建立信道并运行CE；只在测试角度额外计算已知角度参考码本 ----------
     for angle_deg in angles_deg:
         angle_rad = np.deg2rad(angle_deg)
         is_test_angle = np.isclose(angle_deg, test_angle_deg)
         ce_iteration_snapshots = []
         h12, _, _, alpha = build_far_field_channel(angle_rad)
 
-        # 已知角度方案：搜索公共相位，使2-bit量化后的目标方向相干叠加功率最大。
-        (ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1,
-         optimal_common_phase_rad, Direct_Coding_Matrix) = calculate_2bit_compensation_code(angle_deg)
+        if is_test_angle:
+            # 已知角度参考：搜索公共相位，使2-bit量化后的目标方向相干叠加功率最大。
+            (ideal_compensation_phase1, quantized_compensation_phase1, Known_Angle_Matrix_MS1,
+             optimal_common_phase_rad, Direct_Coding_Matrix) = calculate_2bit_compensation_code(angle_deg)
 
-        # 两块MS的列编号和直流偏置设计一致，因此已知角度时直接使用相同编码矩阵。
-        ideal_compensation_phase2 = ideal_compensation_phase1.copy()
-        quantized_compensation_phase2 = quantized_compensation_phase1.copy()
-        Known_Angle_Matrix_MS2 = Known_Angle_Matrix_MS1.copy()
-        Known_Angle_v1 = Compensation_Phasors[Known_Angle_Matrix_MS1]
-        Known_Angle_v2 = Compensation_Phasors[Known_Angle_Matrix_MS2]
+            # 两块MS的列编号和直流偏置设计一致，因此已知角度时直接使用相同编码矩阵。
+            ideal_compensation_phase2 = ideal_compensation_phase1.copy()
+            quantized_compensation_phase2 = quantized_compensation_phase1.copy()
+            Known_Angle_Matrix_MS2 = Known_Angle_Matrix_MS1.copy()
 
         # ---------- 5. 未知CSI盲CE：从均匀概率开始 ----------
         # 初始化均匀概率，矩阵维度(variable_count*state_count)每个元素都是1/4。
@@ -94,6 +100,7 @@ def main() -> None:
         # incumbent保存“L个含噪导频估计SNR”意义下截至当前最好的联合码本。
         incumbent = np.zeros(variable_count, dtype=int)
         incumbent_estimated_snr_linear = -np.inf
+        incumbent_total_power_W = 0.0
         estimated_snr_history_dB, confidence_history = [], []
 
         # ---------- 6. CE迭代：采样 → 测量 → Elite → 更新概率 ----------
@@ -135,6 +142,7 @@ def main() -> None:
             best_index = int(np.argmax(estimated_snr_scores_linear))
             if estimated_snr_scores_linear[best_index] > incumbent_estimated_snr_linear:
                 incumbent_estimated_snr_linear = float(estimated_snr_scores_linear[best_index])
+                incumbent_total_power_W = float(estimated_total_power_W[best_index])
                 incumbent = samples[best_index].copy()
 
             # 取导频估计SNR最高的前15%样本，并统计每个变量中四种补偿相位的出现频率。
@@ -165,53 +173,27 @@ def main() -> None:
                     "estimated_snr_dB": float(estimated_snr_history_dB[-1]),
                 })
 
-            # 当全部非固定变量的最大概率都超过阈值时提前停止。
-            if (iteration + 1 >= max(ce_visualization_iterations)
-                    and np.all(np.max(probability[mask], axis=1) >= convergence_probability)):
-                break
+        # ---------- 7. 最终选择：直接采用全部CE迭代中由L个导频测得的历史最优码本 ----------
+        CE_Optimal_Matrix_MS1 = incumbent[:Columns].copy()
+        CE_Optimal_Matrix_MS2 = incumbent[Columns:].copy()
 
-        # ---------- 7. 最终复测：继续用含噪导频比较历史最优与概率众数 ----------
-        mode = np.argmax(probability, axis=1)
-        mode[list(fixed_variables)] = 0
-        final_candidates = np.stack([incumbent, mode])
-        candidate_v1 = Compensation_Phasors[final_candidates[:, :Columns]]
-        candidate_v2 = Compensation_Phasors[final_candidates[:, Columns:]]
-        candidate_air_channels = np.einsum("mi,ij,mj->m", np.conj(candidate_v2), h12, candidate_v1, optimize=True)
-        candidate_h_eff = Fixed_Link_Field_Gain * candidate_air_channels / Columns**2 * Scan_Field_Factor
-
-        # 两个候选各发送更多导频进行最终复测，降低单轮16导频偶然噪声峰值造成的误选概率。
-        final_noise = np.sqrt(Noise_Power_W / 2) * (
-            rng.normal(size=(final_verification_pilot_symbols_L, 2))
-            + 1j * rng.normal(size=(final_verification_pilot_symbols_L, 2)))
-        final_received_pilots = np.sqrt(Transmit_Power_W) * candidate_h_eff[None, :] + final_noise
-        final_total_power_W = np.mean(np.abs(final_received_pilots) ** 2, axis=0)
-        final_estimated_snr_linear = (final_total_power_W - Noise_Power_W) / Noise_Power_W
-        best_indices = final_candidates[int(np.argmax(final_estimated_snr_linear))]
-        CE_Optimal_Matrix_MS1, CE_Optimal_Matrix_MS2 = best_indices[:Columns], best_indices[Columns:]
-        CE_v1 = Compensation_Phasors[CE_Optimal_Matrix_MS1]
-        CE_v2 = Compensation_Phasors[CE_Optimal_Matrix_MS2]
-
-        # 最后一帧采用导频复测选定的联合编码，保证演化图终点与其余结果图完全一致。
+        # 最后一帧采用历史最优编码，保证演化图终点与其余结果图完全一致。
         if is_test_angle:
             final_snapshot = {
                 "iteration": len(estimated_snr_history_dB),
                 "probability": probability.copy(),
                 "Coding_Matrix_MS1": CE_Optimal_Matrix_MS1.copy(),
                 "Coding_Matrix_MS2": CE_Optimal_Matrix_MS2.copy(),
-                "estimated_snr_dB": float(10 * np.log10(max(float(np.max(final_estimated_snr_linear)), 1e-30))),
+                "estimated_snr_dB": float(10 * np.log10(max(incumbent_estimated_snr_linear, 1e-30))),
             }
             if ce_iteration_snapshots:
                 ce_iteration_snapshots[-1] = final_snapshot
             else:
                 ce_iteration_snapshots.append(final_snapshot)
 
-        # ---------- 8. 用统一模型计算无噪接收信号功率与理论SNR ----------
-        _, Known_Signal_Power_W, Known_SNR_Linear = link_metrics(Known_Angle_v1, Known_Angle_v2, angle_rad, h12)
-        _, CE_Signal_Power_W, CE_SNR_Linear = link_metrics(CE_v1, CE_v2, angle_rad, h12)
-        power_known_dBm.append(10 * np.log10(max(Known_Signal_Power_W, 1e-30)) + 30)
-        power_ce_dBm.append(10 * np.log10(max(CE_Signal_Power_W, 1e-30)) + 30)
-        snr_known_dB.append(10 * np.log10(max(Known_SNR_Linear, 1e-30)))
-        snr_ce_dB.append(10 * np.log10(max(CE_SNR_Linear, 1e-30)))
+        # ---------- 8. 保存CE实际使用的L导频含噪功率和对应标准SNR估计 ----------
+        noisy_power_ce_dBm.append(10 * np.log10(max(incumbent_total_power_W, 1e-30)) + 30)
+        estimated_snr_ce_dB.append(10 * np.log10(max(incumbent_estimated_snr_linear, 1e-30)))
         CE_Optimal_Matrices_MS1.append(CE_Optimal_Matrix_MS1.copy())
         CE_Optimal_Matrices_MS2.append(CE_Optimal_Matrix_MS2.copy())
 
@@ -233,22 +215,20 @@ def main() -> None:
                 "confidence_history": np.asarray(confidence_history),
                 "final_probability": probability.copy(),
                 "ce_iteration_snapshots": ce_iteration_snapshots,
-                "ce_visualization_iterations": ce_visualization_iterations,
+                "selected_iterations": (1, ce_middle_iteration, len(estimated_snr_history_dB)),
                 "noise_power_dBm": Noise_Power_dBm,
                 "pilot_symbols_L": pilot_symbols_L,
-                "final_verification_pilot_symbols_L": final_verification_pilot_symbols_L,
             }
 
     # ---------- 9. 整理绘图需要的数组 ----------
-    power_known_dBm, power_ce_dBm = np.asarray(power_known_dBm), np.asarray(power_ce_dBm)
-    snr_known_dB, snr_ce_dB = np.asarray(snr_known_dB), np.asarray(snr_ce_dB)
+    noisy_power_ce_dBm = np.asarray(noisy_power_ce_dBm)
+    estimated_snr_ce_dB = np.asarray(estimated_snr_ce_dB)
     results = {
         "angles_deg": angles_deg,
-        "power_known_dBm": power_known_dBm,
-        "power_ce_dBm": power_ce_dBm,
-        "snr_known_dB": snr_known_dB,
-        "snr_ce_dB": snr_ce_dB,
+        "noisy_power_ce_dBm": noisy_power_ce_dBm,
+        "estimated_snr_ce_dB": estimated_snr_ce_dB,
         "noise_power_dBm": Noise_Power_dBm,
+        "pilot_symbols_L": pilot_symbols_L,
         "test": test_data,
     }
 
@@ -266,28 +246,38 @@ def main() -> None:
     print(f"Broadside clean received power: {10 * np.log10(Broadside_Signal_Power_W) + 30:.3f} dBm")
     print(f"Broadside theoretical SNR: {10 * np.log10(Broadside_SNR_Linear):.3f} dB")
     print(f"CE pilot symbols per candidate L: {pilot_symbols_L}")
-    print(f"Final verification pilot symbols: {final_verification_pilot_symbols_L}")
     print("CE objective: pilot-estimated SNR = (mean(|y_l|^2) - sigma^2) / sigma^2")
 
     # ---------- 11. 各模块直接绘制自己负责的数据 ----------
-    plt.rcParams.update({"figure.dpi": 100, "axes.grid": True, "grid.alpha": 0.25, "font.size": 10})
-    plot_link_results(results)
-    plot_ce_coding_matrices(angles_deg, np.asarray(CE_Optimal_Matrices_MS1), np.asarray(CE_Optimal_Matrices_MS2))
-    plot_patterns(test_data)
-    plot_ce_iteration_evolution(test_data)
+    # 统一采用清新、低饱和度的论文配色和浅色背景，避免纯黑或高饱和色块抢占视觉注意力。
+    plt.rcParams.update({
+        "figure.dpi": 100, "figure.facecolor": "white", "axes.facecolor": "#FBFCFD",
+        "axes.edgecolor": "#AAB7C4", "axes.labelcolor": "#243447", "font.size": 9.5,
+        "xtick.color": "#34495E", "ytick.color": "#34495E", "axes.grid": True,
+        "grid.color": "#DCE6EE", "grid.alpha": 0.55, "grid.linewidth": 0.6,
+        "legend.frameon": True, "legend.framealpha": 0.88, "legend.edgecolor": "#D6E0E8",
+    })
+    plot_link_results(results, np.asarray(CE_Optimal_Matrices_MS1), np.asarray(CE_Optimal_Matrices_MS2))
 
-    # CE是主程序核心，因此最后一张CE概率图也直接在main()中绘制。
+    # Figure 3属于第二部分：展示测试角度下完整的估计SNR历史与概率置信度，并标出Figure 4选择的四次迭代。
     figure, axes = plt.subplots(1, 2, figsize=(8.4, 3.2))
     iteration = np.arange(1, test_data["estimated_snr_history_dB"].size + 1)
-    axes[0].plot(iteration, test_data["estimated_snr_history_dB"], "-o", ms=3.5, color="#d95f02")
+    axes[0].plot(iteration, test_data["estimated_snr_history_dB"], "-o", ms=3.5, color="#E76F51")
     axes[0].set(xlabel="CE iteration", ylabel="Estimated SNR (dB)",
                 title=f"(a) Pilot-based CE history (L={pilot_symbols_L})")
-    axes[1].plot(iteration, test_data["confidence_history"], "-o", ms=3.5, color="#7570b3")
-    axes[1].axhline(convergence_probability, color="0.35", linestyle="--", label="Threshold")
+    axes[1].plot(iteration, test_data["confidence_history"], "-o", ms=3.5, color="#2A9D8F")
+    axes[1].axhline(convergence_probability, color="#6B7280", linestyle="--", label="Threshold")
     axes[1].set(xlabel="CE iteration", ylabel="Mean maximum probability", ylim=(0.2, 1.02),
                 title="(b) CE probability confidence")
     axes[1].legend(loc="best")
+    for selected_iteration in test_data["selected_iterations"]:
+        axes[0].axvline(selected_iteration, color="#AAB7C4", linestyle="--", linewidth=0.8)
+        axes[1].axvline(selected_iteration, color="#AAB7C4", linestyle="--", linewidth=0.8)
+    figure.suptitle(f"CE convergence at selected angle theta={test_angle_deg:.0f}°", fontsize=12)
     figure.tight_layout()
+
+    # 迭代演化图逐列展示第1次、用户指定的中间时刻和最后一次迭代的内部状态。
+    plot_ce_iteration_evolution(test_data)
 
     # 阻塞式显示会一直保留全部图窗，手动关闭所有图窗后程序结束。
     plt.show()

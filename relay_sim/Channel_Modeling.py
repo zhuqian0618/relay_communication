@@ -2,8 +2,9 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import MultipleLocator
 
-from .MS_Configuration import Beta0, Column_Positions_MS, Columns, Element_Field_Exponent, Lambda, Period_MS
+from .MS_Configuration import Beta0, Column_Positions_MS, Columns, Element_Field_Exponent, Lambda, Period_MS, Phase_State_Cmap
 
 # 两块超表面中心间距固定为6.5 m；孔径宽度和夫琅禾费距离用于检查远场条件。
 Separation_Distance_M = 6.5
@@ -66,47 +67,63 @@ def link_metrics(v1: np.ndarray, v2: np.ndarray, angle_rad: float,
     return complex(h_eff), float(Signal_Power_W), float(Theoretical_SNR_Linear)
 
 
-def plot_link_results(results: dict) -> None:
-    """绘制轨迹、无噪接收信号功率、理论SNR和CE导频估计SNR历史。"""
+def plot_link_results(results: dict, CE_Matrices_MS1: np.ndarray, CE_Matrices_MS2: np.ndarray) -> None:
+    """Figure 1：用2×2大图汇总轨迹、含噪链路测量和两块MS的CE编码矩阵。"""
 
     angles = results["angles_deg"]
     radius = Separation_Distance_M
-    figure, axes = plt.subplots(2, 2, figsize=(8.6, 6.0))
+    figure, axes = plt.subplots(2, 2, figsize=(11.2, 7.4))
 
     # 图(a)：UAV2在以UAV1为圆心、半径6.5 m的圆弧上运动。
     full_circle = np.linspace(0, 2 * np.pi, 400)
-    axes[0, 0].plot(radius * np.cos(full_circle), radius * np.sin(full_circle), "--", color="0.75")
+    axes[0, 0].plot(radius * np.cos(full_circle), radius * np.sin(full_circle), "--", color="#C7D3DD")
     axes[0, 0].plot(radius * np.cos(np.deg2rad(angles)), radius * np.sin(np.deg2rad(angles)),
-                    "o-", color="#d95f02", label="UAV2 trajectory")
-    axes[0, 0].scatter([0], [0], s=80, marker="s", color="#1b9e77", label="UAV1")
+                    "o-", color="#E07A5F", label="UAV2 trajectory")
+    axes[0, 0].scatter([0], [0], s=80, marker="s", color="#2A9D8F", label="UAV1")
     axes[0, 0].set(xlabel="x position (m)", ylabel="y position (m)",
                    title="(a) Constant-distance trajectory", aspect="equal")
-    axes[0, 0].legend(loc="best")
+    axes[0, 0].legend(loc="upper left")
 
-    # 图(b)：两条曲线分别对应已知角度2-bit码本和未知CSI盲CE。
-    axes[0, 1].plot(angles, results["power_known_dBm"], "--o", ms=3.5,
-                    color="#1b9e77", label="Known-angle optimized 2-bit")
-    axes[0, 1].plot(angles, results["power_ce_dBm"], "-o", ms=3.5,
-                    color="#7570b3", label="Unknown-CSI blind CE")
-    axes[0, 1].set(xlabel="UAV2 azimuth psi (deg)", ylabel="Received power (dBm)",
-                   title="(b) Aerial-link received power")
-    axes[0, 1].legend(loc="best")
+    # 图(b)：左轴为L导频测得的含噪总接收功率，右轴为由同一批导频计算的标准SNR估计。
+    snr_axis = axes[0, 1].twinx()
+    power_line = axes[0, 1].plot(angles, results["noisy_power_ce_dBm"], "-o", ms=4,
+                                 color="#4C78A8", label="Noisy received power")[0]
+    snr_line = snr_axis.plot(angles, results["estimated_snr_ce_dB"], "-s", ms=3.5,
+                             color="#E76F51", label="Estimated SNR")[0]
+    axes[0, 1].set(xlabel="UAV2 azimuth angle (deg)", ylabel="Noisy received power (dBm)",
+                   title=f"(b) CE-optimized link measurements (L={results['pilot_symbols_L']})")
+    snr_axis.set_ylabel("Estimated SNR (dB)", color="#E76F51")
+    snr_axis.tick_params(axis="y", labelcolor="#E76F51")
 
-    # 图(c)：理论SNR严格按Pt*|h_eff|²/sigma²计算，而不是由单次含噪观测计算。
-    axes[1, 0].plot(angles, results["snr_known_dB"], "--o", ms=3.5, color="#1b9e77")
-    axes[1, 0].plot(angles, results["snr_ce_dB"], "-o", ms=3.5, color="#7570b3")
-    axes[1, 0].set(xlabel="UAV2 azimuth psi (deg)", ylabel="SNR (dB)",
-                   title=f"(c) Theoretical SNR (noise={results['noise_power_dBm']:.1f} dBm)")
+    # 双轴均采用2 dB刻度和相同显示跨度；右轴下界额外下移，使SNR曲线显示在功率曲线上方。
+    Power_Values = results["noisy_power_ce_dBm"]
+    SNR_Values = results["estimated_snr_ce_dB"]
+    Power_Lower = 2 * np.floor(np.min(Power_Values) / 2) - 2
+    SNR_Lower = 2 * np.floor(np.min(SNR_Values) / 2) - 4
+    Common_Span = 2 * np.ceil(max(np.max(Power_Values) - Power_Lower + 4,
+                                  np.max(SNR_Values) - SNR_Lower + 2) / 2)
+    axes[0, 1].set_ylim(Power_Lower, Power_Lower + Common_Span)
+    snr_axis.set_ylim(SNR_Lower, SNR_Lower + Common_Span)
+    axes[0, 1].yaxis.set_major_locator(MultipleLocator(2))
+    snr_axis.yaxis.set_major_locator(MultipleLocator(2))
+    axes[0, 1].legend([power_line, snr_line], [power_line.get_label(), snr_line.get_label()], loc="lower right")
 
-    # 图(d)：CE每轮只看到L个含噪导频给出的估计SNR；移动平均仅帮助观察趋势，不参与优化。
-    estimated = np.asarray(results["test"]["estimated_snr_history_dB"])
-    iteration = np.arange(1, estimated.size + 1)
-    moving_average = np.convolve(estimated, np.ones(3) / 3, mode="valid")
-    axes[1, 1].plot(iteration, estimated, "-o", ms=3.5, color="#d95f02", label="Estimated-SNR incumbent")
-    axes[1, 1].plot(iteration[2:], moving_average, color="#1b9e77", lw=2, label="3-point average")
-    axes[1, 1].set(xlabel="CE iteration", ylabel="Estimated SNR (dB)",
-                   title=f"(d) Pilot-based CE history at psi={results['test']['angle_deg']:.0f}°, L={results['test']['pilot_symbols_L']}")
-    axes[1, 1].legend(loc="best")
+    # 下排分别显示MS1和MS2沿整条UAV轨迹得到的CE最优2-bit编码矩阵。
+    Column_Edges = np.arange(0.5, Columns + 1.5)
+    Angle_Edges = np.empty(angles.size + 1)
+    Angle_Edges[1:-1] = (angles[:-1] + angles[1:]) / 2
+    Angle_Edges[0] = angles[0] - (Angle_Edges[1] - angles[0])
+    Angle_Edges[-1] = angles[-1] + (angles[-1] - Angle_Edges[-2])
+    for ax, Coding_Matrices, title in [
+        (axes[1, 0], CE_Matrices_MS1, "(c) MS1 CE-optimal coding matrix"),
+        (axes[1, 1], CE_Matrices_MS2, "(d) MS2 CE-optimal coding matrix"),
+    ]:
+        image = ax.pcolormesh(Column_Edges, Angle_Edges, Coding_Matrices, cmap=Phase_State_Cmap,
+                              vmin=-0.5, vmax=3.5, shading="flat", edgecolors="#C9CED6", linewidth=0.25)
+        ax.set(xlabel="Column index", ylabel="UAV2 azimuth angle (deg)", title=title)
+        ax.set_xticks([1, 4, 7, 10, 13, 16])
+        colorbar = figure.colorbar(image, ax=ax, ticks=[0, 1, 2, 3], fraction=0.046, pad=0.03)
+        colorbar.ax.set_yticklabels(["0°", "90°", "180°", "270°"])
 
-    figure.suptitle("Dual UAV-borne 2-bit metasurface far-field link", fontsize=14)
-    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+    figure.suptitle("Overall CE-optimized aerial-link results", fontsize=14)
+    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
