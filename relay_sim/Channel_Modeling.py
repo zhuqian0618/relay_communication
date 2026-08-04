@@ -11,7 +11,7 @@ Aperture_Width_MS = Columns * Period_MS
 Far_Field_Distance_M = 2 * Aperture_Width_MS**2 / Lambda
 
 # 发射功率只在统一模型y=sqrt(Pt)*h_eff*s+n中出现一次。
-Transmit_Power_dBm = -15
+Transmit_Power_dBm = 0.0
 Transmit_Power_W = 10 ** ((Transmit_Power_dBm - 30) / 10)
 MS1_Broadside_Gain_dBi = 15.0
 MS2_Broadside_Gain_dBi = 15.0
@@ -23,7 +23,7 @@ Fixed_Link_Power_Gain_dB = MS1_Broadside_Gain_dBi + MS2_Broadside_Gain_dBi + Tot
 Fixed_Link_Field_Gain = np.sqrt(10 ** (Fixed_Link_Power_Gain_dB / 10))
 
 # 直接给定接收端总噪声功率sigma²；后续生成训练数据时只需修改该变量。
-Noise_Power_dBm = -60.0
+Noise_Power_dBm = -90.0
 Noise_Power_W = 10 ** ((Noise_Power_dBm - 30) / 10)
 
 

@@ -93,7 +93,7 @@ def main() -> None:
 
         # incumbent保存“L个含噪导频估计SNR”意义下截至当前最好的联合码本。
         incumbent = np.zeros(variable_count, dtype=int)
-        incumbent_estimated_snr_dB = -np.inf
+        incumbent_estimated_snr_linear = -np.inf
         estimated_snr_history_dB, confidence_history = [], []
 
         # ---------- 6. CE迭代：采样 → 测量 → Elite → 更新概率 ----------
@@ -105,7 +105,7 @@ def main() -> None:
                 samples[:, variable] = rng.choice(state_count, population_size, p=probability[variable])
 
             # 保留历史最优解和当前概率众数，避免优秀码本在随机采样中丢失。
-            if np.isfinite(incumbent_estimated_snr_dB):
+            if np.isfinite(incumbent_estimated_snr_linear):
                 samples[0] = incumbent
             samples[1] = np.argmax(probability, axis=1)
             samples[:, fixed_variables] = 0
@@ -126,21 +126,20 @@ def main() -> None:
                 + 1j * rng.normal(size=(pilot_symbols_L, population_size)))
             received_pilots = np.sqrt(Transmit_Power_W) * h_eff_batch[None, :] + noise
 
-            # 用L个含噪接收功率的平均值估计E[|y|²]，减去已知噪声功率得到有用信号功率。
-            # max只防止有限导频在低SNR时产生负的功率估计；此时大量候选会落到同一极低分值，CE将难以收敛。
+            # 标准SNR估计为(mean(|y_l|²)-sigma²)/sigma²；有限L时估计值可能暂时为负。
+            # CE在线性域直接比较这些估计值，不提前截断，因此完整保留低SNR测量的相对大小。
             estimated_total_power_W = np.mean(np.abs(received_pilots) ** 2, axis=0)
-            estimated_signal_power_W = np.maximum(estimated_total_power_W - Noise_Power_W, 1e-30)
-            estimated_snr_scores_dB = 10 * np.log10(estimated_signal_power_W / Noise_Power_W)
+            estimated_snr_scores_linear = (estimated_total_power_W - Noise_Power_W) / Noise_Power_W
 
             # 如果本代出现更高的导频估计SNR，就更新历史最优联合码本。
-            best_index = int(np.argmax(estimated_snr_scores_dB))
-            if estimated_snr_scores_dB[best_index] > incumbent_estimated_snr_dB:
-                incumbent_estimated_snr_dB = float(estimated_snr_scores_dB[best_index])
+            best_index = int(np.argmax(estimated_snr_scores_linear))
+            if estimated_snr_scores_linear[best_index] > incumbent_estimated_snr_linear:
+                incumbent_estimated_snr_linear = float(estimated_snr_scores_linear[best_index])
                 incumbent = samples[best_index].copy()
 
             # 取导频估计SNR最高的前15%样本，并统计每个变量中四种补偿相位的出现频率。
             elite_count = max(2, int(np.ceil(elite_fraction * population_size)))
-            elite_samples = samples[np.argsort(estimated_snr_scores_dB)[-elite_count:]]
+            elite_samples = samples[np.argsort(estimated_snr_scores_linear)[-elite_count:]]
             elite_probability = np.column_stack([(elite_samples == state).mean(axis=0) for state in range(state_count)])
 
             # 用平滑系数更新概率，同时保留最小探索概率，防止过早锁死。
@@ -150,8 +149,8 @@ def main() -> None:
             for fixed in fixed_variables:
                 probability[fixed] = [1.0, 0.0, 0.0, 0.0]
 
-            # 记录CE真正看到的“含噪导频估计SNR”历史最优与当前平均置信度。
-            estimated_snr_history_dB.append(incumbent_estimated_snr_dB)
+            # dB无法表示非正SNR估计，因此只在绘图转换时使用极小正数保护log10；CE排序不受影响。
+            estimated_snr_history_dB.append(10 * np.log10(max(incumbent_estimated_snr_linear, 1e-30)))
             mask = np.ones(variable_count, dtype=bool)
             mask[list(fixed_variables)] = False
             confidence_history.append(np.max(probability[mask], axis=1).mean())
@@ -186,9 +185,8 @@ def main() -> None:
             + 1j * rng.normal(size=(final_verification_pilot_symbols_L, 2)))
         final_received_pilots = np.sqrt(Transmit_Power_W) * candidate_h_eff[None, :] + final_noise
         final_total_power_W = np.mean(np.abs(final_received_pilots) ** 2, axis=0)
-        final_signal_power_W = np.maximum(final_total_power_W - Noise_Power_W, 1e-30)
-        final_estimated_snr = final_signal_power_W / Noise_Power_W
-        best_indices = final_candidates[int(np.argmax(final_estimated_snr))]
+        final_estimated_snr_linear = (final_total_power_W - Noise_Power_W) / Noise_Power_W
+        best_indices = final_candidates[int(np.argmax(final_estimated_snr_linear))]
         CE_Optimal_Matrix_MS1, CE_Optimal_Matrix_MS2 = best_indices[:Columns], best_indices[Columns:]
         CE_v1 = Compensation_Phasors[CE_Optimal_Matrix_MS1]
         CE_v2 = Compensation_Phasors[CE_Optimal_Matrix_MS2]
@@ -200,7 +198,7 @@ def main() -> None:
                 "probability": probability.copy(),
                 "Coding_Matrix_MS1": CE_Optimal_Matrix_MS1.copy(),
                 "Coding_Matrix_MS2": CE_Optimal_Matrix_MS2.copy(),
-                "estimated_snr_dB": float(10 * np.log10(max(float(np.max(final_estimated_snr)), 1e-30))),
+                "estimated_snr_dB": float(10 * np.log10(max(float(np.max(final_estimated_snr_linear)), 1e-30))),
             }
             if ce_iteration_snapshots:
                 ce_iteration_snapshots[-1] = final_snapshot
@@ -269,7 +267,7 @@ def main() -> None:
     print(f"Broadside theoretical SNR: {10 * np.log10(Broadside_SNR_Linear):.3f} dB")
     print(f"CE pilot symbols per candidate L: {pilot_symbols_L}")
     print(f"Final verification pilot symbols: {final_verification_pilot_symbols_L}")
-    print("CE objective: pilot-estimated SNR = max(mean(|y_l|^2) - sigma^2, 0) / sigma^2")
+    print("CE objective: pilot-estimated SNR = (mean(|y_l|^2) - sigma^2) / sigma^2")
 
     # ---------- 11. 各模块直接绘制自己负责的数据 ----------
     plt.rcParams.update({"figure.dpi": 100, "axes.grid": True, "grid.alpha": 0.25, "font.size": 10})
