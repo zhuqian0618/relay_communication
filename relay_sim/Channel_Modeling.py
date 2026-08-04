@@ -1,8 +1,13 @@
 """统一建立远场空中信道、等效信道、链路预算、接收功率和理论SNR。"""
 
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.ticker import MultipleLocator
+
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MultipleLocator
+except ImportError:  # Core channel calculations remain usable without plotting.
+    plt = None
+    MultipleLocator = None
 
 from .MS_Configuration import Beta0, Column_Positions_MS, Columns, Element_Field_Exponent, Lambda, Period_MS, Phase_State_Cmap
 
@@ -34,8 +39,14 @@ SNR_Y_Limits_dB = (10.0, 35.0)
 SNR_Y_Interval_dB = 5.0
 
 
-def build_far_field_channel(angle_rad: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, complex]:
+def build_far_field_channel(
+    angle_rad: float,
+    separation_distance_M: float = Separation_Distance_M,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, complex]:
     """构造同一水平面、固定距离、单径LoS条件下的16×16远场信道矩阵。"""
+
+    if separation_distance_M <= 0.0:
+        raise ValueError("separation_distance_M must be positive")
 
     # 两块MS列编号与朝向定义一致，因此给定同一局部角度时使用相同空间响应向量。
     Space_Phase_Rad = Beta0 * Column_Positions_MS * np.sin(angle_rad)
@@ -43,8 +54,8 @@ def build_far_field_channel(angle_rad: float) -> tuple[np.ndarray, np.ndarray, n
     a2 = np.exp(-1j * Space_Phase_Rad)
 
     # alpha包含Friis场衰减lambda/(4*pi*R)以及传播距离引起的公共相位。
-    alpha = Lambda / (4 * np.pi * Separation_Distance_M)
-    alpha *= np.exp(-1j * Beta0 * Separation_Distance_M)
+    alpha = Lambda / (4 * np.pi * separation_distance_M)
+    alpha *= np.exp(-1j * Beta0 * separation_distance_M)
 
     # 远场单径LoS信道为接收空间响应和发射空间响应共轭转置的外积，因此理论秩为1。
     h12 = alpha * np.outer(a2, np.conj(a1))
@@ -75,6 +86,9 @@ def link_metrics(v1: np.ndarray, v2: np.ndarray, angle_rad: float,
 
 def plot_link_results(results: dict, CE_Matrices_MS1: np.ndarray, CE_Matrices_MS2: np.ndarray) -> None:
     """Figure 1：用2×2大图汇总轨迹、含噪链路测量和两块MS的CE编码矩阵。"""
+
+    if plt is None or MultipleLocator is None:
+        raise RuntimeError("plot_link_results requires matplotlib")
 
     angles = results["angles_deg"]
     radius = Separation_Distance_M

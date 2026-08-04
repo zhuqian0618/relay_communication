@@ -1,8 +1,13 @@
 """计算2-bit列控超表面的相位编码，按照叠加定理计算远场方向图。"""
 
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import ListedColormap
+
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+except ImportError:  # Plotting is optional for headless experiment control.
+    plt = None
+    ListedColormap = None
 
 # 超表面工作频率为5.8 GHz；波长和自由空间相位常数在本模块统一定义，其他模块直接引用。
 Speed_Of_Light_M_S = 299_792_458.0
@@ -32,7 +37,10 @@ Pattern_Floor_dB = -50.0
 
 # 四种2-bit相位采用清新的离散颜色；所有编码热力图和概率柱状图统一使用该配色。
 Phase_State_Colors = ["#2A82C5", "#079D63", "#E46964", "#F8CC04"]
-Phase_State_Cmap = ListedColormap(Phase_State_Colors, name="Viridis_2bit_Phases")
+Phase_State_Cmap = (
+    ListedColormap(Phase_State_Colors, name="Viridis_2bit_Phases")
+    if ListedColormap is not None else None
+)
 
 
 def calculate_2bit_compensation_code(Target_Angle_Deg: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
@@ -98,6 +106,9 @@ def direction_pattern_dB(Coding_Matrix: np.ndarray) -> np.ndarray:
 def plot_ce_iteration_evolution(test_data: dict) -> None:
     """每列显示一次CE迭代，并从上到下排列概率、双MS相位和方向图。"""
 
+    if plt is None:
+        raise RuntimeError("plot_ce_iteration_evolution requires matplotlib")
+
     snapshots = test_data["ce_iteration_snapshots"]
     if not snapshots:
         return
@@ -145,7 +156,7 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
         Probability_Axis.set_yticks(np.arange(4), ["0°", "90°", "180°", "270°"], fontsize=7)
         Probability_Axis.set_zticks([0.0, 0.5, 1.0], ["0", "0.5", "1"])
         Probability_Axis.view_init(elev=26, azim=-62)
-        Probability_Axis.set_box_aspect((4, 1.0, 1.0), zoom=1.8)
+        Probability_Axis.set_box_aspect((5, 1.0, 1.0), zoom=2)
 
         # 去掉3D坐标轴默认的灰色面板，只保留坐标轴和浅色网格线。
         Probability_Axis.set_facecolor("white")

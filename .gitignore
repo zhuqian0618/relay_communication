@@ -17,3 +17,9 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Trained neural priors and experiment outputs
+*.pt
+*.pth
+models/
+results/
