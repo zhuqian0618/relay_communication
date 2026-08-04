@@ -33,8 +33,8 @@ def main() -> None:
     # ---------- 1. 实验扫描参数：只在本主程序中使用 ----------
     angle_start_deg = -60.0
     angle_stop_deg = 60.0
-    angle_step_deg = 5.0
-    test_angle_deg = 25.0
+    angle_step_deg = 10.0
+    test_angle_deg = 20.0
 
     # 角度步长可以任意指定；终点和测试角度若不在规则采样点中，就自动补入并按升序排列。
     if angle_step_deg <= 0:
@@ -252,7 +252,7 @@ def main() -> None:
     # 统一采用清新、低饱和度的论文配色和浅色背景，避免纯黑或高饱和色块抢占视觉注意力。
     plt.rcParams.update({
         "figure.dpi": 100, "figure.facecolor": "white", "axes.facecolor": "#FBFCFD",
-        "axes.edgecolor": "#AAB7C4", "axes.labelcolor": "#243447", "font.size": 9.5,
+        "axes.edgecolor": "#AAB7C4", "axes.labelcolor": "#243447", "font.family": "Arial", "font.size": 9.5,
         "xtick.color": "#34495E", "ytick.color": "#34495E", "axes.grid": True,
         "grid.color": "#DCE6EE", "grid.alpha": 0.55, "grid.linewidth": 0.6,
         "legend.frameon": True, "legend.framealpha": 0.88, "legend.edgecolor": "#D6E0E8",

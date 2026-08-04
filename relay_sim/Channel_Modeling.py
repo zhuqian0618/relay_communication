@@ -27,6 +27,12 @@ Fixed_Link_Field_Gain = np.sqrt(10 ** (Fixed_Link_Power_Gain_dB / 10))
 Noise_Power_dBm = -90.0
 Noise_Power_W = 10 ** ((Noise_Power_dBm - 30) / 10)
 
+# 图1(b)双纵轴的显示范围和主刻度间隔；修改这四个参数即可自行控制坐标轴。
+Received_Power_Y_Limits_dBm = (-70.0, -45.0)
+Received_Power_Y_Interval_dB = 5.0
+SNR_Y_Limits_dB = (10.0, 35.0)
+SNR_Y_Interval_dB = 5.0
+
 
 def build_far_field_channel(angle_rad: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, complex]:
     """构造同一水平面、固定距离、单径LoS条件下的16×16远场信道矩阵。"""
@@ -95,17 +101,11 @@ def plot_link_results(results: dict, CE_Matrices_MS1: np.ndarray, CE_Matrices_MS
     snr_axis.set_ylabel("Estimated SNR (dB)", color="#E76F51")
     snr_axis.tick_params(axis="y", labelcolor="#E76F51")
 
-    # 双轴均采用2 dB刻度和相同显示跨度；右轴下界额外下移，使SNR曲线显示在功率曲线上方。
-    Power_Values = results["noisy_power_ce_dBm"]
-    SNR_Values = results["estimated_snr_ce_dB"]
-    Power_Lower = 2 * np.floor(np.min(Power_Values) / 2) - 2
-    SNR_Lower = 2 * np.floor(np.min(SNR_Values) / 2) - 4
-    Common_Span = 2 * np.ceil(max(np.max(Power_Values) - Power_Lower + 4,
-                                  np.max(SNR_Values) - SNR_Lower + 2) / 2)
-    axes[0, 1].set_ylim(Power_Lower, Power_Lower + Common_Span)
-    snr_axis.set_ylim(SNR_Lower, SNR_Lower + Common_Span)
-    axes[0, 1].yaxis.set_major_locator(MultipleLocator(2))
-    snr_axis.yaxis.set_major_locator(MultipleLocator(2))
+    # 双纵轴范围和间隔完全由文件开头的四个参数控制，不再根据当前数据自动改变。
+    axes[0, 1].set_ylim(*Received_Power_Y_Limits_dBm)
+    snr_axis.set_ylim(*SNR_Y_Limits_dB)
+    axes[0, 1].yaxis.set_major_locator(MultipleLocator(Received_Power_Y_Interval_dB))
+    snr_axis.yaxis.set_major_locator(MultipleLocator(SNR_Y_Interval_dB))
     axes[0, 1].legend([power_line, snr_line], [power_line.get_label(), snr_line.get_label()], loc="lower right")
 
     # 下排分别显示MS1和MS2沿整条UAV轨迹得到的CE最优2-bit编码矩阵。
@@ -115,13 +115,15 @@ def plot_link_results(results: dict, CE_Matrices_MS1: np.ndarray, CE_Matrices_MS
     Angle_Edges[0] = angles[0] - (Angle_Edges[1] - angles[0])
     Angle_Edges[-1] = angles[-1] + (angles[-1] - Angle_Edges[-2])
     for ax, Coding_Matrices, title in [
-        (axes[1, 0], CE_Matrices_MS1, "(c) MS1 CE-optimal coding matrix"),
-        (axes[1, 1], CE_Matrices_MS2, "(d) MS2 CE-optimal coding matrix"),
+        (axes[1, 0], CE_Matrices_MS1, "(c) MS1 compensation-phase map"),
+        (axes[1, 1], CE_Matrices_MS2, "(d) MS2 compensation-phase map"),
     ]:
         image = ax.pcolormesh(Column_Edges, Angle_Edges, Coding_Matrices, cmap=Phase_State_Cmap,
-                              vmin=-0.5, vmax=3.5, shading="flat", edgecolors="#C9CED6", linewidth=0.25)
+                              vmin=-0.5, vmax=3.5, shading="flat", edgecolors="#C9CED6", linewidth=0.45)
         ax.set(xlabel="Column index", ylabel="UAV2 azimuth angle (deg)", title=title)
         ax.set_xticks([1, 4, 7, 10, 13, 16])
+        ax.tick_params(axis="both", which="major", length=0)
+        ax.grid(False, which="major")
         colorbar = figure.colorbar(image, ax=ax, ticks=[0, 1, 2, 3], fraction=0.046, pad=0.03)
         colorbar.ax.set_yticklabels(["0°", "90°", "180°", "270°"])
 

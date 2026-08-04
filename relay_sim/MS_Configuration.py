@@ -30,7 +30,7 @@ Element_Field_Exponent = 0.8
 Pattern_Angles_Deg = np.arange(-90.0, 90.01, 0.1)
 Pattern_Floor_dB = -50.0
 
-# 四种2-bit相位采用清新、色盲友好的离散颜色；所有编码热力图和概率柱状图统一使用该配色。
+# 四种2-bit相位采用清新的离散颜色；所有编码热力图和概率柱状图统一使用该配色。
 Phase_State_Colors = ["#2A82C5", "#079D63", "#E46964", "#F8CC04"]
 Phase_State_Cmap = ListedColormap(Phase_State_Colors, name="Viridis_2bit_Phases")
 
@@ -105,13 +105,14 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
     # 三列依次对应第1次、用户指定的中间时刻和最后一次迭代。
     Snapshot_By_Iteration = {snapshot["iteration"]: snapshot for snapshot in snapshots}
     Selected_Snapshots = [Snapshot_By_Iteration[i] for i in test_data["selected_iterations"]]
-    figure = plt.figure(figsize=(13.0, 9.2))
-    grid = figure.add_gridspec(4, 3, height_ratios=[1.55, 0.30, 0.30, 1.0])
-    figure.subplots_adjust(left=0.06, right=0.925, bottom=0.07, top=0.89, wspace=0.27, hspace=0.52)
+    figure = plt.figure(figsize=(15.6, 8.3))
+    grid = figure.add_gridspec(4, 3, height_ratios=[1.05, 0.36, 0.36, 1.0])
+    figure.subplots_adjust(left=0.045, right=0.94, bottom=0.075, top=0.90, wspace=0.18, hspace=0.54)
     Column_Tick_Positions = np.array([0, 3, 6, 9, 12, 15])
     Column_Tick_Labels = ["1", "4", "7", "10", "13", "16"]
-    Joint_Ticks = [1, 4, 7, 10, 13, 16, 17, 20, 23, 26, 29, 32]
-    Joint_Tick_Labels = ["1", "4", "7", "10", "13", "16"] * 2
+    Joint_Ticks = [1, 5, 9, 13, 17, 21, 25, 29, 32]
+    Joint_Tick_Labels = [str(index) for index in Joint_Ticks]
+    Panel_Letters = [("a", "b", "c"), ("d", "e", "f"), ("g", "h", "i")]
     Known_Angle_Pattern = direction_pattern_dB(test_data["Known_Angle_Matrix_MS1"])
     Last_Phase_Image = None
 
@@ -120,23 +121,31 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
         probability = snapshot["probability"]
         Coding_MS1 = snapshot["Coding_Matrix_MS1"]
         Coding_MS2 = snapshot["Coding_Matrix_MS2"]
+        Probability_Letter, Phase_Letter, Pattern_Letter = Panel_Letters[column]
 
         # 每列顶部：用3D柱状图展示32个联合变量选择四种2-bit相位状态的概率。
         Probability_Axis = figure.add_subplot(grid[0, column], projection="3d")
         X = np.repeat(np.arange(1, 2 * Columns + 1), 4)
         Y = np.tile(np.arange(4), 2 * Columns)
         Heights = probability.reshape(-1)
-        Probability_Axis.bar3d(X - 0.32, Y - 0.28, np.zeros_like(Heights), 0.64, 0.56, Heights,
-                               color=np.tile(Phase_State_Colors, 2 * Columns), edgecolor="#C9CED6",
-                               linewidth=0.25, shade=False, alpha=0.96)
-        Probability_Axis.set(xlim=(0.3, 32.7), ylim=(-0.4, 3.7), zlim=(0, 1),
-                             xlabel="MS1: 1-16 | MS2: 1-16", ylabel="Phase state",
-                             title=f"Iteration {iteration}\nBest estimated SNR={snapshot['estimated_snr_dB']:.2f} dB")
-        Probability_Axis.set_zlabel("Probability")
+        Probability_Bars = Probability_Axis.bar3d(
+            X - 0.34, Y - 0.21, np.zeros_like(Heights), 0.68, 0.42, Heights,
+            color=np.tile(Phase_State_Colors, 2 * Columns), edgecolor="#C9CED6",
+            linewidth=0.25, shade=False, alpha=0.96)
+        # 放大三维坐标盒时，Matplotlib默认会按子图矩形裁掉边缘柱体；关闭柱体集合裁剪以完整显示首尾变量。
+        Probability_Bars.set_clip_on(False)
+        # 使用略小于极限放大值的zoom，确保首尾概率柱均位于三维坐标轴的可见区域。
+        Probability_Axis.set(xlim=(0.3, 32.7), ylim=(-0.4, 3.7), zlim=(0, 1.02),
+                             xlabel="", ylabel="",
+                             title=f"({Probability_Letter}) Iteration {iteration}: probability distribution\n"
+                                   f"Best estimated SNR={snapshot['estimated_snr_dB']:.2f} dB")
+        Probability_Axis.set_zlabel("")
+        Probability_Axis.tick_params(pad=0)
         Probability_Axis.set_xticks(Joint_Ticks, Joint_Tick_Labels, fontsize=7)
         Probability_Axis.set_yticks(np.arange(4), ["0°", "90°", "180°", "270°"], fontsize=7)
+        Probability_Axis.set_zticks([0.0, 0.5, 1.0], ["0", "0.5", "1"])
         Probability_Axis.view_init(elev=26, azim=-62)
-        Probability_Axis.set_box_aspect((3.2, 1.0, 0.9))
+        Probability_Axis.set_box_aspect((4, 1.0, 1.0), zoom=1.8)
 
         # 去掉3D坐标轴默认的灰色面板，只保留坐标轴和浅色网格线。
         Probability_Axis.set_facecolor("white")
@@ -150,9 +159,10 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
         # 中间两层：MS1和MS2分别使用一张较薄的2×16相位热力图。
         for phase_row, Coding_Matrix, MS_Name in [(1, Coding_MS1, "MS1"), (2, Coding_MS2, "MS2")]:
             Phase_Axis = figure.add_subplot(grid[phase_row, column])
-            Last_Phase_Image = Phase_Axis.imshow(np.tile(Coding_Matrix, (Rows, 1)), aspect="auto", cmap=Phase_State_Cmap,
+            Last_Phase_Image = Phase_Axis.imshow(np.tile(Coding_Matrix, (Rows, 1)), aspect="equal", cmap=Phase_State_Cmap,
                                                  vmin=-0.5, vmax=3.5, interpolation="nearest")
-            Phase_Axis.set_title(f"{MS_Name} compensation-phase map", fontsize=10)
+            Phase_Title = f"({Phase_Letter}) {MS_Name} compensation-phase map" if phase_row == 1 else f"{MS_Name} compensation-phase map"
+            Phase_Axis.set_title(Phase_Title, pad=5)
             Phase_Axis.set_xlabel("Column index")
             Phase_Axis.set_ylabel("Row")
             Phase_Axis.set_xticks(Column_Tick_Positions, Column_Tick_Labels)
@@ -175,11 +185,11 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
         Pattern_Axis.axvline(test_data["angle_deg"], color="#D95F02", linestyle=":", label="Test direction")
         Pattern_Axis.set(xlim=(-90, 90), ylim=(Pattern_Floor_dB, 1), xlabel="theta (deg)",
                          ylabel="Normalized pattern (dB)" if column == 0 else "",
-                         title="Normalized direction pattern")
+                         title=f"({Pattern_Letter}) Normalized direction pattern")
         Pattern_Axis.set_xticks(np.arange(-90, 91, 30))
         Pattern_Axis.legend(loc="lower right", fontsize=8)
 
-    Colorbar_Axis = figure.add_axes([0.94, 0.34, 0.012, 0.14])
+    Colorbar_Axis = figure.add_axes([0.955, 0.39, 0.012, 0.20])
     Colorbar = figure.colorbar(Last_Phase_Image, cax=Colorbar_Axis, ticks=[0, 1, 2, 3])
     Colorbar.ax.set_yticklabels(["0°", "90°", "180°", "270°"])
     figure.suptitle(f"Part II: Blind-CE evolution at selected angle theta={test_data['angle_deg']:.0f}°", fontsize=14)
