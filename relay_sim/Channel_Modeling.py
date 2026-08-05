@@ -141,5 +141,5 @@ def plot_link_results(results: dict, CE_Matrices_MS1: np.ndarray, CE_Matrices_MS
         colorbar = figure.colorbar(image, ax=ax, ticks=[0, 1, 2, 3], fraction=0.046, pad=0.03)
         colorbar.ax.set_yticklabels(["0°", "90°", "180°", "270°"])
 
-    figure.suptitle("Overall CE-optimized aerial-link results", fontsize=14)
+    figure.suptitle("Part I:Overall CE-optimized aerial-link results", fontsize=14)
     figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))

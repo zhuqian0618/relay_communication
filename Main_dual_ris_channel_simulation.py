@@ -273,7 +273,7 @@ def main() -> None:
     for selected_iteration in test_data["selected_iterations"]:
         axes[0].axvline(selected_iteration, color="#AAB7C4", linestyle="--", linewidth=0.8)
         axes[1].axvline(selected_iteration, color="#AAB7C4", linestyle="--", linewidth=0.8)
-    figure.suptitle(f"CE convergence at selected angle theta={test_angle_deg:.0f}°", fontsize=12)
+    figure.suptitle(f"Part II: CE convergence at selected angle theta={test_angle_deg:.0f}°", fontsize=12)
     figure.tight_layout()
 
     # 迭代演化图逐列展示第1次、用户指定的中间时刻和最后一次迭代的内部状态。
