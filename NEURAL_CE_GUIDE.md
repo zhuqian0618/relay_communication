@@ -1,222 +1,171 @@
-# 初学者版：MLP神经网络辅助CE编码优化
+# 无角度输入的“探针 MLP + CE”初学者指南
 
-## 1. 先认识当前网络
+## 1. 现在的网络学什么
 
-当前网络是**多层感知机（MLP）**，也叫全连接深度神经网络（DNN）。
+实际飞行时，网络不知道 UAV2 的角度。系统只知道自己给两块超表面发送了什么编码，以及频谱仪返回了多少 dBm。
 
-它不是卷积神经网络CNN。CNN主要用于图像或具有明显局部邻域结构的数据。它也不是循环神经网络或GRU，因为本版本不读取历史位置序列。
-
-整个流程只有四步：
+因此当前流程是：
 
 ```text
-控制角度 → MLP预测编码概率 → 小规模CE搜索 → 频谱仪实测最佳编码
+上一位置最佳编码
+        ↓
+在新位置测2次上一编码，并测6个固定扰动编码
+        ↓
+把编码和相对功率组成128维输入
+        ↓
+MLP预测30个自由变量的四状态概率
+        ↓
+CE继续测量候选，总计严格36次
+        ↓
+输出36次测量中功率最大的编码
 ```
 
-网络只是给CE一个较好的搜索起点。最终编码必须来自频谱仪真正测量过的候选。
+角度仍会出现在仿真数据生成器中，因为计算无线信道必须知道仿真位置；但是角度不会进入神经网络。
 
-## 2. 输入、标签和输出
+## 2. 三个文件的阅读顺序
 
-### 输入
+### `model.py`
 
-原始角度首先转换为24组正弦和余弦：
+先阅读这个文件。它包括：
+
+1. 32变量和30个自由变量的含义；
+2. 六个探针编码如何产生；
+3. 128维输入如何构造；
+4. `SimpleCodeNet` 的三层全连接结构；
+5. 模型参数如何保存和加载。
+
+可以先运行：
+
+```powershell
+python model.py
+```
+
+正确输出形状应为：
+
+```text
+输入形状: (3, 128)
+输出形状: (3, 30, 4)
+```
+
+### `train.py`
+
+文件开头集中放置了 batch size、epoch、学习率和模型路径。直接运行：
+
+```powershell
+python train.py
+```
+
+训练结束会保存：
+
+- `probe_code_net.pth`：模型参数；
+- `probe_training_history.png`：损失和准确率曲线；
+- `probe_code_heatmap.png`：一条验证轨迹上的真实/预测编码。
+
+训练曲线同时显示普通准确率和“发生变化变量准确率”。后者更重要，因为相邻位置的大部分编码通常不变，只看普通准确率可能产生误导。
+
+### `ce_demo.py`
+
+训练完成后运行：
+
+```powershell
+python ce_demo.py
+```
+
+它会比较沿用上一编码、36次冷启动CE、36次探针网络CE和仿真参考编码。
+
+## 3. 128维输入的含义
+
+```text
+上一编码one-hot                 120维
+六个探针相对功率                 6维
+移动前后功率变化                  1维
+两次重复测量差                    1维
+合计                            128维
+```
+
+假设上一编码在新位置测得两次功率 `-52.0` 和 `-51.8 dBm`，基准平均值就是 `-51.9 dBm`。某个探针测得 `-50.5 dBm`，它的相对功率为：
+
+```text
+-50.5 - (-51.9) = +1.4 dB
+```
+
+网络使用 `+1.4 dB`，而不是绝对值 `-50.5 dBm`。这样所有读数整体漂移相同dB时，网络输入基本不变。
+
+## 4. 36次读数如何分配
+
+```text
+第1--2次    上一位置最佳编码重复测量
+第3--8次    三组变量分别增加/减少一级
+第9--12次   网络最大概率编码和三个相干变化模板候选
+第13--24次  第二代CE
+第25--36次  第三代CE
+```
+
+最初八个探针也是已经测量过的候选，会参加最终最佳编码比较。网络预测本身不会直接成为结果，除非该编码经过频谱仪测量。
+
+训练时还会保存轨迹中出现过的完整编码变化模板。在线阶段模板只包含30个状态差，不包含角度。这样第9--12次不会把30个变量完全独立地随机拼接，能够尽量保持一组编码对应的波束相位关系。
+
+仿真预训练只是起点。当前不同随机硬件批次之间仍会出现明显泛化差距，因此是否达到“参考功率1 dB以内”必须通过实测CSV微调和独立飞行批次验证，不能只根据逐变量准确率判断。
+
+## 5. 实测CSV格式
+
+当你在少量位置运行完整CE获得真实标签后，按照 `train.measured_csv_header()` 给出的列顺序保存：
+
+```text
+run_id,
+previous_best_power_dBm,
+baseline_1_dBm,baseline_2_dBm,
+probe_0_dBm,...,probe_5_dBm,
+prev_c0,...,prev_c31,
+target_c0,...,target_c31
+```
+
+CSV不需要角度。`run_id` 表示一次完整飞行或实验批次。至少准备两个不同的 `run_id`，程序会按批次划分训练集和验证集。
+
+在 `train.py` 顶部把：
 
 ```python
-[sin(angle), cos(angle), sin(2*angle), cos(2*angle), ..., sin(24*angle), cos(24*angle)]
+REAL_DATA_CSV = None
 ```
 
-因此单个样本的输入维度是48。它们称为**傅里叶角度特征**，仍然全部由同一个角度确定，并没有增加新的传感器输入。
+改成CSV路径即可执行实测数据微调。
 
-只使用第一组`sin(angle)、cos(angle)`时，输入变化过于平滑，难以表示2-bit编码在量化边界处的频繁跳转。加入高阶正弦和余弦后，普通MLP也能学习这些快速变化。
+## 6. 接入真实频谱仪
 
-### 标签
-
-两块超表面各有16个编码变量，组合成32个标签。每个变量有4个状态：
-
-```text
-状态0 = 0°
-状态1 = 90°
-状态2 = 180°
-状态3 = 270°
-```
-
-### 输出
-
-网络为32个变量分别输出4个logits，张量形状为：
-
-```text
-[batch_size, 32, 4]
-```
-
-Softmax将每组4个logits转换为4种状态的概率。
-
-## 3. 网络结构
-
-```text
-输入48维傅里叶角度特征
-  ↓
-Linear(48, 128)
-  ↓
-ReLU
-  ↓
-Linear(128, 256)
-  ↓
-ReLU
-  ↓
-Linear(256, 128)
-  ↓
-reshape为 [batch_size, 32, 4]
-```
-
-`Linear`实现 `y = Wx + b`。ReLU为网络加入非线性，否则多个Linear仍等价于一个Linear。
-
-## 4. 仿真数据如何产生
-
-默认训练角度为：
-
-```text
-−60° 到 +60°，每0.5°一个样本，共241个样本
-```
-
-验证角度相对训练网格偏移0.25°，用于检查网络能否预测没有直接见过的中间角度。
-
-可以把训练间隔改成0.25°，得到481个训练样本。但相邻编码通常重复，所以更密的数据并不等于同等比例增加的新信息。
-
-发射功率和噪声功率不作为第一版网络输入，因为在线性信道模型中它们通常不会改变理论最优相位编码。它们只用于比较高、中、低SNR下CE搜索的稳定性。
-
-## 5. 模型如何训练
-
-安装依赖：
-
-```powershell
-pip install -r requirements-pytorch.txt
-```
-
-当前已验证环境为Python 3.11.15和PyTorch 2.5.1。
-
-运行仿真预训练：
-
-```powershell
-python Main_simple_neural_ce.py --mode train
-```
-
-每个batch执行：
-
-```python
-optimizer.zero_grad()       # 清空上一轮梯度
-logits = model(features)    # 前向传播
-loss = criterion(logits, labels)
-loss.backward()             # 反向传播，计算梯度
-optimizer.step()            # Adam更新参数
-```
-
-训练会生成：
-
-- `simple_code_net.pt`：训练后的模型；
-- `simple_training_history.png`：训练/验证损失和准确率；
-- `simple_code_heatmap.png`：真实编码与预测编码热力图。
-
-如果训练损失和验证损失一起下降，说明模型正常学习。若训练损失继续下降而验证损失上升，则可能过拟合。程序会记录验证损失最低的epoch，并在训练结束后自动恢复该时刻的网络参数；图中的灰色虚线表示这个最佳epoch。
-
-默认最多训练300个epoch；如果验证损失连续40轮没有改善，则提前结束，避免继续过拟合。
-
-## 6. 如何加入实测数据
-
-实测CSV格式必须为：
-
-```text
-angle_deg,c0,c1,...,c31
-```
-
-每行保存一个角度的完整CE最优联合编码。变量`c0`和`c16`固定为0。
-
-微调命令：
-
-```powershell
-python Main_simple_neural_ce.py --mode train --real-data measured_codes.csv
-```
-
-程序会先使用仿真数据预训练，再使用较小学习率对实测数据微调，并生成`simple_finetune_history.png`。
-
-## 7. 冷启动和热启动是什么
-
-### 冷启动CE
-
-没有网络帮助，4种状态初始概率都是0.25：
-
-```text
-[0.25, 0.25, 0.25, 0.25]
-```
-
-### 热启动CE
-
-使用网络和上一位置编码：
-
-```text
-初始概率 = 70%网络概率 + 20%上一编码 + 10%均匀探索
-```
-
-两种方法都固定运行3代，每代实测12组，共36次频谱仪读数。每代选择功率最高的3组更新概率。
-
-运行冷热启动对比：
-
-```powershell
-python Main_simple_neural_ce.py --mode demo --model simple_code_net.pt
-```
-
-程序分别在高SNR、默认SNR和低SNR下比较两种方法。
-
-## 8. 如何接入真实频谱仪
-
-只需要替换测量函数：
+`ce_demo.py` 当前使用 `make_simulated_measurement()`。真实实验中只需提供同样形式的函数：
 
 ```python
 def measure(joint_code):
-    # joint_code[:16] 下发给MS1
-    # joint_code[16:] 下发给MS2
-    # 等待硬件和频谱仪稳定
-    return measured_power_dBm
+    # 1. 把joint_code发送到两块超表面
+    # 2. 等待硬件稳定
+    # 3. 从频谱仪读取功率
+    return power_dBm
 ```
 
-调用方式：
+随后调用：
 
 ```python
-result = warm_start_ce(
-    model=model,
-    angle_deg=current_commanded_angle,
-    previous_code=last_best_code,
-    measure=measure,
+result = probe_assisted_ce(
+    model,
+    previous_code,
+    previous_best_power_dBm,
+    measure,
 )
-
-new_code = result.best_code
-new_power_dBm = result.best_power_dBm
 ```
 
-## 9. 两种“交叉熵”不要混淆
+返回的 `result.best_code` 是新位置应采用的联合编码，`result.best_power_dBm` 是对应的实测功率。
 
-- `CrossEntropyLoss`：训练神经网络分类器的损失函数。
-- CE优化算法：采样编码、测量功率、选择精英并更新概率的黑盒搜索算法。
+## 7. 推荐学习顺序
 
-它们使用了相同的中文名称，但在代码中承担完全不同的任务。
+1. NumPy数组、索引和 `reshape`；
+2. one-hot编码；
+3. `Linear` 全连接层和 ReLU；
+4. logits、Softmax和四分类；
+5. `CrossEntropyLoss`；
+6. 前向传播、反向传播和AdamW；
+7. epoch、batch size、学习率；
+8. 训练集、验证集和按实验批次划分数据；
+9. CE算法的采样、精英选择和概率更新；
+10. 绝对功率、相对功率与测量噪声。
 
-## 10. 推荐学习顺序
-
-1. NumPy数组、形状、索引和`reshape`；
-2. 特征、标签、训练集和验证集；
-3. 单个神经元和 `y = Wx + b`；
-4. 全连接层与MLP；
-5. ReLU激活函数；
-6. logits、Softmax和四分类；
-7. CrossEntropyLoss；
-8. 前向传播、反向传播和梯度；
-9. epoch、batch size和learning rate；
-10. PyTorch的`nn.Module`、DataLoader、Adam、保存和加载；
-11. CE算法的采样、精英选择和概率更新；
-12. 冷启动与热启动。
-
-CNN、GRU、DeepSets、模型集成和不确定度可以等基础版本稳定后再学习。
-
-## 11. 自动化检查
-
-```powershell
-python -m unittest discover -s tests -v
-```
+注意区分：神经网络的 `CrossEntropyLoss` 是分类损失；CE优化算法是通过采样和精英选择搜索编码。二者不是同一个概念。
