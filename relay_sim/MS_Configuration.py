@@ -113,7 +113,7 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
     if not snapshots:
         return
 
-    # 三列依次对应第1次、用户指定的中间时刻和最后一次迭代。
+    # 三列依次对应第1次、用户指定的观察时刻和满足双重终止条件时的实际终止时刻。
     Snapshot_By_Iteration = {snapshot["iteration"]: snapshot for snapshot in snapshots}
     Selected_Snapshots = [Snapshot_By_Iteration[i] for i in test_data["selected_iterations"]]
     figure = plt.figure(figsize=(15.6, 8.3))
@@ -145,16 +145,16 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
             linewidth=0.25, shade=False, alpha=0.96)
         # 放大三维坐标盒时，Matplotlib默认会按子图矩形裁掉边缘柱体；关闭柱体集合裁剪以完整显示首尾变量。
         Probability_Bars.set_clip_on(False)
-        # 使用略小于极限放大值的zoom，确保首尾概率柱均位于三维坐标轴的可见区域。
+        # 三维坐标范围固定覆盖32个联合变量、4种相位状态和0至1的概率。
         Probability_Axis.set(xlim=(0.3, 32.7), ylim=(-0.4, 3.7), zlim=(0, 1.02),
                              xlabel="", ylabel="",
                              title=f"({Probability_Letter}) Iteration {iteration}: probability distribution\n"
                                    f"Best estimated SNR={snapshot['estimated_snr_dB']:.2f} dB")
         Probability_Axis.set_zlabel("")
         Probability_Axis.tick_params(pad=0)
-        Probability_Axis.set_xticks(Joint_Ticks, Joint_Tick_Labels, fontsize=7)
-        Probability_Axis.set_yticks(np.arange(4), ["0°", "90°", "180°", "270°"], fontsize=7)
-        Probability_Axis.set_zticks([0.0, 0.5, 1.0], ["0", "0.5", "1"])
+        Probability_Axis.set_xticks(Joint_Ticks, Joint_Tick_Labels, fontsize=10)
+        Probability_Axis.set_yticks(np.arange(4), ["0°", "90°", "180°", "270°"], fontsize=8)
+        Probability_Axis.set_zticks([0.0, 0.5, 1.0], ["0", "0.5", "1"], fontsize=10)
         Probability_Axis.view_init(elev=26, azim=-62)
         Probability_Axis.set_box_aspect((5, 1.0, 1.0), zoom=2)
 
@@ -186,7 +186,7 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
             Phase_Axis.grid(which="minor", color="#C9CED6", linewidth=0.45)
             Phase_Axis.tick_params(which="minor", bottom=False, left=False)
 
-        # 每列底部：在直角坐标系中绘制方向图；最后一次迭代额外加入已知角度参考结果。
+        # 每列底部绘制方向图；只有实际终止时刻额外加入已知角度参考结果。
         Pattern_Axis = figure.add_subplot(grid[3, column])
         Pattern_Axis.plot(Pattern_Angles_Deg, direction_pattern_dB(Coding_MS1), color="#4C78A8", label="CE MS1")
         Pattern_Axis.plot(Pattern_Angles_Deg, direction_pattern_dB(Coding_MS2), "--", color="#E76F51", label="CE MS2")

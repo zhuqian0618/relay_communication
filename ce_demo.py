@@ -71,11 +71,12 @@ def sample_codes(
     count: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    samples = np.empty((count, VARIABLE_COUNT), dtype=int)
+    Candidate_Coding_Matrices = np.empty((count, VARIABLE_COUNT), dtype=int)
     for variable in range(VARIABLE_COUNT):
-        samples[:, variable] = rng.choice(STATE_COUNT, size=count, p=probability[variable])
-    samples[:, list(FIXED_VARIABLES)] = 0
-    return samples
+        Candidate_Coding_Matrices[:, variable] = rng.choice(
+            STATE_COUNT, size=count, p=probability[variable])
+    Candidate_Coding_Matrices[:, list(FIXED_VARIABLES)] = 0
+    return Candidate_Coding_Matrices
 
 
 def update_probability(
