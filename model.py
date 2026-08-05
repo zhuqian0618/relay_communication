@@ -25,52 +25,52 @@ from relay_sim.MS_Configuration import Columns, Compensation_Phasors, calculate_
 # ============================== 1. 基本参数 ==============================
 
 STATE_COUNT = 4
-VARIABLE_COUNT = 2 * Columns
-FIXED_VARIABLES = (0, Columns)
-FREE_VARIABLES = np.asarray(
-    [index for index in range(VARIABLE_COUNT) if index not in FIXED_VARIABLES],
+COLUMN_COUNT = 2 * Columns
+FIXED_COLUMNS = (0, Columns)
+FREE_COLUMNS = np.asarray(
+    [column_index for column_index in range(COLUMN_COUNT) if column_index not in FIXED_COLUMNS],
     dtype=int,
 )
-FREE_VARIABLE_COUNT = FREE_VARIABLES.size
+FREE_COLUMN_COUNT = FREE_COLUMNS.size
 
 PROBE_COUNT = 6
 POWER_CLIP_DB = 12.0
 REPEAT_CLIP_DB = 3.0
-NETWORK_INPUT_DIM = FREE_VARIABLE_COUNT * STATE_COUNT + PROBE_COUNT + 2
+NETWORK_INPUT_DIM = FREE_COLUMN_COUNT * STATE_COUNT + PROBE_COUNT + 2
 MODEL_FORMAT_VERSION = 3
 
 
 # ============================== 2. 编码工具 ==============================
 
 def validate_joint_code(code: np.ndarray) -> np.ndarray:
-    """检查32个2-bit状态，并强制两个参考变量为状态0。"""
+    """检查32个列控2-bit状态，并强制两块MS的参考列为状态0。"""
 
     result = np.asarray(code, dtype=int).reshape(-1).copy()
-    if result.size != VARIABLE_COUNT:
-        raise ValueError(f"joint code must contain {VARIABLE_COUNT} states")
+    if result.size != COLUMN_COUNT:
+        raise ValueError(f"joint code must contain {COLUMN_COUNT} column states")
     if np.any((result < 0) | (result >= STATE_COUNT)):
         raise ValueError("all code states must be integers from 0 to 3")
-    result[list(FIXED_VARIABLES)] = 0
+    result[list(FIXED_COLUMNS)] = 0
     return result
 
 
-def free_code(joint_code: np.ndarray) -> np.ndarray:
-    """从32变量联合编码中取出30个可调变量。"""
+def extract_free_column_code(joint_code: np.ndarray) -> np.ndarray:
+    """从32列联合编码中取出30个参与优化的列状态。"""
 
-    return validate_joint_code(joint_code)[FREE_VARIABLES]
+    return validate_joint_code(joint_code)[FREE_COLUMNS]
 
 
-def restore_joint_code(free_states: np.ndarray) -> np.ndarray:
-    """把30个预测状态放回32变量联合编码。"""
+def restore_joint_column_code(free_column_states: np.ndarray) -> np.ndarray:
+    """把30个预测列状态放回32列联合编码。"""
 
-    states = np.asarray(free_states, dtype=int).reshape(-1)
-    if states.size != FREE_VARIABLE_COUNT:
-        raise ValueError(f"free code must contain {FREE_VARIABLE_COUNT} states")
-    if np.any((states < 0) | (states >= STATE_COUNT)):
+    free_column_states = np.asarray(free_column_states, dtype=int).reshape(-1)
+    if free_column_states.size != FREE_COLUMN_COUNT:
+        raise ValueError(f"free code must contain {FREE_COLUMN_COUNT} column states")
+    if np.any((free_column_states < 0) | (free_column_states >= STATE_COUNT)):
         raise ValueError("all free states must be integers from 0 to 3")
-    joint = np.zeros(VARIABLE_COUNT, dtype=int)
-    joint[FREE_VARIABLES] = states
-    return joint
+    joint_column_code = np.zeros(COLUMN_COUNT, dtype=int)
+    joint_column_code[FREE_COLUMNS] = free_column_states
+    return joint_column_code
 
 
 @lru_cache(maxsize=512)
@@ -91,21 +91,21 @@ def reference_joint_code(angle_deg: float, state_offsets: np.ndarray | None = No
         return ideal.copy()
     offsets = validate_joint_code(state_offsets)
     result = ideal.copy()
-    result[FREE_VARIABLES] = (result[FREE_VARIABLES] - offsets[FREE_VARIABLES]) % STATE_COUNT
+    result[FREE_COLUMNS] = (result[FREE_COLUMNS] - offsets[FREE_COLUMNS]) % STATE_COUNT
     return validate_joint_code(result)
 
 
 def build_probe_codes(previous_code: np.ndarray) -> np.ndarray:
-    """生成三组变量的“增加一级/减少一级”六个固定探针。"""
+    """将可调列分成三组，生成“增加一级/减少一级”六个固定探针。"""
 
     previous_code = validate_joint_code(previous_code)
     probes = []
-    # 30个自由变量按0,1,2,0,1,2...轮流分为三组。
+    # 30个参与优化的列按0,1,2,0,1,2...轮流分为三组。
     for group_index in range(3):
-        group = FREE_VARIABLES[np.arange(FREE_VARIABLE_COUNT) % 3 == group_index]
+        column_group = FREE_COLUMNS[np.arange(FREE_COLUMN_COUNT) % 3 == group_index]
         for change in (+1, -1):
             probe = previous_code.copy()
-            probe[group] = (probe[group] + change) % STATE_COUNT
+            probe[column_group] = (probe[column_group] + change) % STATE_COUNT
             probes.append(probe)
     return np.asarray(probes, dtype=int)
 
@@ -131,8 +131,8 @@ def build_probe_features(
     if not np.all(np.isfinite(all_powers)):
         raise ValueError("all spectrum-analyzer powers must be finite")
 
-    # 每个自由变量用四维one-hot表示，例如状态2写成[0, 0, 1, 0]。
-    previous_one_hot = np.eye(STATE_COUNT, dtype=np.float32)[previous_code[FREE_VARIABLES]].reshape(-1)
+    # 每个参与优化的列用四维one-hot表示，例如状态2写成[0, 0, 1, 0]。
+    previous_one_hot = np.eye(STATE_COUNT, dtype=np.float32)[previous_code[FREE_COLUMNS]].reshape(-1)
     baseline_mean = float(np.mean(baseline))
 
     # 相对功率消除了所有读数共同增加或减少所造成的影响。
@@ -179,19 +179,19 @@ def make_simulated_measurement(
     noise_power_W = 10.0 ** ((float(noise_power_dBm) - 30.0) / 10.0)
     drift_linear = 10.0 ** (float(gain_drift_dB) / 20.0)
     offsets = (
-        np.zeros(VARIABLE_COUNT, dtype=int)
+        np.zeros(COLUMN_COUNT, dtype=int)
         if state_offsets is None
         else validate_joint_code(state_offsets)
     )
     phases = (
-        np.zeros(VARIABLE_COUNT, dtype=float)
+        np.zeros(COLUMN_COUNT, dtype=float)
         if phase_errors_rad is None
-        else np.asarray(phase_errors_rad, dtype=float).reshape(VARIABLE_COUNT)
+        else np.asarray(phase_errors_rad, dtype=float).reshape(COLUMN_COUNT)
     )
     amplitudes = (
-        np.ones(VARIABLE_COUNT, dtype=float)
+        np.ones(COLUMN_COUNT, dtype=float)
         if amplitude_errors is None
-        else np.asarray(amplitude_errors, dtype=float).reshape(VARIABLE_COUNT)
+        else np.asarray(amplitude_errors, dtype=float).reshape(COLUMN_COUNT)
     )
     if not np.all(np.isfinite(phases)) or not np.all(np.isfinite(amplitudes)):
         raise ValueError("hardware errors must be finite")
@@ -214,23 +214,23 @@ def make_simulated_measurement(
 # ============================== 5. MLP网络 ==============================
 
 class SimpleCodeNet(nn.Module):
-    """根据探针响应预测30个自由变量的四状态概率。"""
+    """根据探针响应预测30个参与优化列的四状态概率。"""
 
     def __init__(self) -> None:
         super().__init__()
         # 训练时保存出现过的完整编码变化模板。它不是网络输入，也不包含角度。
-        self.transition_deltas = np.empty((0, FREE_VARIABLE_COUNT), dtype=int)
+        self.transition_deltas = np.empty((0, FREE_COLUMN_COUNT), dtype=int)
         self.model = nn.Sequential(
             nn.Linear(NETWORK_INPUT_DIM, 256),
             nn.ReLU(),
             nn.Linear(256, 256),
             nn.ReLU(),
-            nn.Linear(256, FREE_VARIABLE_COUNT * STATE_COUNT),
+            nn.Linear(256, FREE_COLUMN_COUNT * STATE_COUNT),
         )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         logits = self.model(inputs)
-        return logits.reshape(-1, FREE_VARIABLE_COUNT, STATE_COUNT)
+        return logits.reshape(-1, FREE_COLUMN_COUNT, STATE_COUNT)
 
 
 def predict_probabilities(
@@ -238,7 +238,7 @@ def predict_probabilities(
     features: np.ndarray,
     device: str | torch.device | None = None,
 ) -> np.ndarray:
-    """返回完整的32×4状态概率；两个固定变量只允许状态0。"""
+    """返回完整的32×4列状态概率；两块MS的参考列只允许状态0。"""
 
     device_object = torch.device(device or next(model.parameters()).device)
     feature_tensor = torch.as_tensor(features, dtype=torch.float32, device=device_object).reshape(1, -1)
@@ -246,10 +246,10 @@ def predict_probabilities(
         raise ValueError(f"network input must contain {NETWORK_INPUT_DIM} values")
     model.eval()
     with torch.no_grad():
-        free_probability = torch.softmax(model(feature_tensor)[0], dim=-1).cpu().numpy()
-    probability = np.zeros((VARIABLE_COUNT, STATE_COUNT), dtype=float)
-    probability[FREE_VARIABLES] = free_probability
-    probability[list(FIXED_VARIABLES), 0] = 1.0
+        free_column_probability = torch.softmax(model(feature_tensor)[0], dim=-1).cpu().numpy()
+    probability = np.zeros((COLUMN_COUNT, STATE_COUNT), dtype=float)
+    probability[FREE_COLUMNS] = free_column_probability
+    probability[list(FIXED_COLUMNS), 0] = 1.0
     return probability
 
 
@@ -277,9 +277,9 @@ def load_model(path: str | Path, device: str | None = None) -> SimpleCodeNet:
     model = SimpleCodeNet().to(device_object)
     model.load_state_dict(checkpoint["model_state"])
     saved_deltas = checkpoint.get(
-        "transition_deltas", torch.empty((0, FREE_VARIABLE_COUNT), dtype=torch.long)
+        "transition_deltas", torch.empty((0, FREE_COLUMN_COUNT), dtype=torch.long)
     )
-    model.transition_deltas = saved_deltas.cpu().numpy().astype(int).reshape(-1, FREE_VARIABLE_COUNT)
+    model.transition_deltas = saved_deltas.cpu().numpy().astype(int).reshape(-1, FREE_COLUMN_COUNT)
     model.eval()
     return model
 
@@ -292,4 +292,4 @@ if __name__ == "__main__":
     example_output = network(example_input)
     print("输入形状:", tuple(example_input.shape))
     print("输出形状:", tuple(example_output.shape))
-    print("含义: 3个样本，每个样本预测30个自由变量，每个变量有4种状态。")
+    print("含义: 3个样本，每个样本预测30个参与优化列，每列有4种状态。")

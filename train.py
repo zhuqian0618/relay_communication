@@ -17,14 +17,14 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from model import (
-    FIXED_VARIABLES,
-    FREE_VARIABLES,
+    FIXED_COLUMNS,
+    FREE_COLUMNS,
     NETWORK_INPUT_DIM,
     PROBE_COUNT,
     SimpleCodeNet,
     build_probe_codes,
     build_probe_features,
-    free_code,
+    extract_free_column_code,
     make_simulated_measurement,
     reference_joint_code,
     save_model,
@@ -123,12 +123,13 @@ def _sample_hardware(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, 
     """为一整条轨迹固定一组单元误差，模拟不同实验批次。"""
 
     state_offsets = np.zeros(32, dtype=int)
-    faulty = rng.random(FREE_VARIABLES.size) < 0.06
-    state_offsets[FREE_VARIABLES[faulty]] = rng.choice((-1, 1), size=int(np.sum(faulty))) % 4
+    faulty_columns_mask = rng.random(FREE_COLUMNS.size) < 0.06
+    state_offsets[FREE_COLUMNS[faulty_columns_mask]] = rng.choice(
+        (-1, 1), size=int(np.sum(faulty_columns_mask))) % 4
     phase_errors = rng.normal(0.0, np.deg2rad(4.0), size=32)
     amplitude_errors = np.clip(rng.normal(1.0, 0.03, size=32), 0.85, 1.15)
-    phase_errors[list(FIXED_VARIABLES)] = 0.0
-    amplitude_errors[list(FIXED_VARIABLES)] = 1.0
+    phase_errors[list(FIXED_COLUMNS)] = 0.0
+    amplitude_errors[list(FIXED_COLUMNS)] = 1.0
     return state_offsets, phase_errors, amplitude_errors
 
 
@@ -192,8 +193,8 @@ def build_simulation_dataset(seed: int, split_name: str) -> ProbeDatasetArrays:
                         probe_powers,
                     )
                 )
-                targets.append(free_code(target_code))
-                previous_targets.append(free_code(previous_code))
+                targets.append(extract_free_column_code(target_code))
+                previous_targets.append(extract_free_column_code(previous_code))
                 run_ids.append(run_id)
                 current_angles.append(current_angle)
 
@@ -247,7 +248,8 @@ def load_measured_csv(path: str | Path) -> ProbeDatasetArrays:
                 raise ValueError(f"invalid value on CSV line {line_number}: {error}") from error
             if not row["run_id"].strip():
                 raise ValueError(f"CSV line {line_number} has an empty run_id")
-            rows.append((features, free_code(target_code), free_code(previous_code), row["run_id"]))
+            rows.append((features, extract_free_column_code(target_code),
+                         extract_free_column_code(previous_code), row["run_id"]))
     if not rows:
         raise ValueError("CSV file contains no measurement rows")
     return ProbeDatasetArrays(
@@ -278,9 +280,9 @@ def weighted_code_loss(
     previous_codes: torch.Tensor,
     change_weight: float = CHANGE_LOSS_WEIGHT,
 ) -> torch.Tensor:
-    """状态发生变化的变量获得更高权重，避免网络只复制上一编码。"""
+    """状态发生变化的可控列获得更高权重，避免网络只复制上一编码。"""
 
-    per_variable_loss = nn.functional.cross_entropy(
+    per_column_loss = nn.functional.cross_entropy(
         logits.reshape(-1, 4), targets.reshape(-1), reduction="none"
     ).reshape_as(targets)
     weights = torch.where(
@@ -288,7 +290,7 @@ def weighted_code_loss(
         torch.as_tensor(change_weight, device=logits.device),
         torch.as_tensor(1.0, device=logits.device),
     )
-    return torch.sum(per_variable_loss * weights) / torch.sum(weights)
+    return torch.sum(per_column_loss * weights) / torch.sum(weights)
 
 
 def evaluate_model(model: SimpleCodeNet, loader: DataLoader, device: torch.device) -> dict[str, float]:
@@ -296,7 +298,7 @@ def evaluate_model(model: SimpleCodeNet, loader: DataLoader, device: torch.devic
     loss_sum = 0.0
     sample_count = 0
     correct = changed_correct = changed_count = joint_correct = 0
-    variable_count = 0
+    column_count = 0
     with torch.no_grad():
         for features, targets, previous_codes in loader:
             features = features.to(device)
@@ -310,13 +312,13 @@ def evaluate_model(model: SimpleCodeNet, loader: DataLoader, device: torch.devic
             matches = predicted == targets
             changes = targets != previous_codes
             correct += int(matches.sum().item())
-            variable_count += int(matches.numel())
+            column_count += int(matches.numel())
             changed_correct += int((matches & changes).sum().item())
             changed_count += int(changes.sum().item())
             joint_correct += int(torch.all(matches, dim=1).sum().item())
     return {
         "loss": loss_sum / sample_count,
-        "accuracy": correct / variable_count,
+        "accuracy": correct / column_count,
         "change_accuracy": changed_correct / max(changed_count, 1),
         "joint_accuracy": joint_correct / sample_count,
     }
@@ -433,8 +435,8 @@ def plot_training_history(history: dict[str, object], save_path: str | Path) -> 
     axes[0].plot(epochs, history["validation_loss"], label="Validation")
     axes[0].set(title="Weighted cross-entropy", xlabel="Epoch", ylabel="Loss")
     axes[0].legend()
-    axes[1].plot(epochs, history["validation_accuracy"], label="All variables")
-    axes[1].plot(epochs, history["validation_change_accuracy"], label="Changed variables")
+    axes[1].plot(epochs, history["validation_accuracy"], label="All columns")
+    axes[1].plot(epochs, history["validation_change_accuracy"], label="Changed columns")
     axes[1].set(title="Validation accuracy", xlabel="Epoch", ylabel="Accuracy", ylim=(0, 1.02))
     axes[1].legend()
     axes[2].plot(epochs, history["train_joint_accuracy"], label="Training")
@@ -462,11 +464,11 @@ def plot_code_heatmap(
     true_codes = validation_data.target_codes[indices]
     figure, axes = plt.subplots(2, 1, figsize=(10.0, 5.2), sharex=True)
     for axis, codes, title in (
-        (axes[0], true_codes, "True free-variable codes"),
+        (axes[0], true_codes, "True free-column codes"),
         (axes[1], predicted, "Probe-MLP predicted codes"),
     ):
         image = axis.imshow(codes.T, aspect="auto", origin="lower", vmin=-0.5, vmax=3.5)
-        axis.set(title=title, ylabel="Free variable")
+        axis.set(title=title, ylabel="Free column")
     axes[1].set_xlabel("Trajectory sample index (angle is not a network input)")
     figure.colorbar(image, ax=axes, ticks=(0, 1, 2, 3), fraction=0.025)
     figure.subplots_adjust(right=0.89, hspace=0.28)

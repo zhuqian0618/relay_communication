@@ -54,10 +54,10 @@ def main() -> None:
         raise ValueError("observation_iteration必须大于1且小于max_iterations。")
 
     # 两块MS各有16列、每列4种状态，所以联合概率矩阵大小为32×4。
-    variable_count, state_count = 2 * Columns, Compensation_Phase_States_Rad.size
+    column_count, state_count = 2 * Columns, Compensation_Phase_States_Rad.size
 
     # 第一列补偿相位固定为0°，可以消除每块MS公共补偿相位不唯一的问题。
-    fixed_variables = (0, Columns)
+    fixed_columns = (0, Columns)
 
     # ---------- 3. 为角度扫描结果分配列表 ----------
     noisy_power_ce_dBm, estimated_snr_ce_dB = [], []
@@ -82,12 +82,12 @@ def main() -> None:
             Known_Angle_Matrix_MS2 = Known_Angle_Matrix_MS1.copy()
 
         # ---------- 5. 未知CSI盲CE：从均匀概率开始 ----------
-        # 初始化均匀概率，矩阵维度(variable_count*state_count)每个元素都是1/4。
-        probability = np.full((variable_count, state_count), 1 / state_count)
+        # 初始化均匀概率，矩阵维度为column_count×state_count，每个元素都是1/4。
+        probability = np.full((column_count, state_count), 1 / state_count)
 
         # MS1和MS2第一列固定为状态0
-        for fixed in fixed_variables:
-            probability[fixed] = [1.0, 0.0, 0.0, 0.0]
+        for fixed_column in fixed_columns:
+            probability[fixed_column] = [1.0, 0.0, 0.0, 0.0]
 
         # incumbent保存“L个含噪导频估计SNR”意义下，截至当前最好的联合码本。
         incumbent = None
@@ -98,17 +98,17 @@ def main() -> None:
         # ---------- 6. CE迭代：生成候选编码 → 测量 → Elite → 更新概率 → 判断双重终止条件 ----------
         for iteration_count in range(1, max_iterations + 1):
 
-            # 每行是一组双MS联合编码，每列是一个可控列的2-bit状态，矩阵尺寸为population_size×variable_count。
-            Candidate_Coding_Matrices = np.empty((population_size, variable_count), dtype=int)
-            for variable in range(variable_count):
-                Candidate_Coding_Matrices[:, variable] = rng.choice(
-                    state_count, population_size, p=probability[variable])
+            # 每行是一组双MS联合编码，每列是一个可控列的2-bit状态，矩阵尺寸为population_size×column_count。
+            Candidate_Coding_Matrices = np.empty((population_size, column_count), dtype=int)
+            for column_index in range(column_count):
+                Candidate_Coding_Matrices[:, column_index] = rng.choice(
+                    state_count, population_size, p=probability[column_index])
 
             # 保留历史最优解和当前概率众数，避免优秀码本在随机采样中丢失。
             if incumbent is not None:
                 Candidate_Coding_Matrices[0] = incumbent
             Candidate_Coding_Matrices[1] = np.argmax(probability, axis=1)
-            Candidate_Coding_Matrices[:, fixed_variables] = 0
+            Candidate_Coding_Matrices[:, fixed_columns] = 0
 
             # 将每组32维状态拆成MS1和MS2各16列的复补偿相位向量。
             v1_batch = Compensation_Phasors[Candidate_Coding_Matrices[:, :Columns]]
@@ -137,7 +137,7 @@ def main() -> None:
                 incumbent_total_power_W = float(estimated_total_power_W[best_index])
                 incumbent = Candidate_Coding_Matrices[best_index].copy()
 
-            # 取导频估计SNR最高的一组候选联合编码，并统计每个变量中四种补偿相位的出现频率。
+            # 取导频估计SNR最高的一组候选联合编码，并统计每个可控列中四种补偿相位的出现频率。
             elite_count = max(2, int(np.ceil(elite_fraction * population_size)))
             Elite_Coding_Matrices = Candidate_Coding_Matrices[
                 np.argsort(estimated_snr_scores_linear)[-elite_count:]]
@@ -148,14 +148,14 @@ def main() -> None:
             probability = (1 - smoothing) * probability + smoothing * elite_probability
             probability = np.maximum(probability, minimum_probability)
             probability /= probability.sum(axis=1, keepdims=True)
-            for fixed in fixed_variables:
-                probability[fixed] = [1.0, 0.0, 0.0, 0.0]
+            for fixed_column in fixed_columns:
+                probability[fixed_column] = [1.0, 0.0, 0.0, 0.0]
 
             estimated_snr_history_dB.append(10 * np.log10(incumbent_estimated_snr_linear))
-            # 两个固定参考列的最大概率恒为1，因此只对其余30个实际搜索变量计算平均最大概率。
-            mask = np.ones(variable_count, dtype=bool)
-            mask[list(fixed_variables)] = False
-            mean_max_probability = float(np.max(probability[mask], axis=1).mean())
+            # 两个固定参考列的最大概率恒为1，因此只对其余30个实际优化列计算平均最大概率。
+            optimized_columns_mask = np.ones(column_count, dtype=bool)
+            optimized_columns_mask[list(fixed_columns)] = False
+            mean_max_probability = float(np.max(probability[optimized_columns_mask], axis=1).mean())
             mean_max_probability_history.append(mean_max_probability)
 
             # 只记录测试角度的CE内部状态，供后续展示概率、相位和方向图如何随迭代演化。

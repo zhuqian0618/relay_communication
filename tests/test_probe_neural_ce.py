@@ -8,15 +8,15 @@ import torch
 
 from ce_demo import cold_start_ce, probe_assisted_ce
 from model import (
-    FIXED_VARIABLES,
-    FREE_VARIABLES,
+    FIXED_COLUMNS,
+    FREE_COLUMNS,
     NETWORK_INPUT_DIM,
     SimpleCodeNet,
     build_probe_codes,
     build_probe_features,
     load_model,
     reference_joint_code,
-    restore_joint_code,
+    restore_joint_column_code,
     save_model,
 )
 from train import (
@@ -35,10 +35,10 @@ class ProbeFeatureTest(unittest.TestCase):
         self.baseline = np.asarray([-52.0, -51.8])
         self.probes = np.asarray([-51.0, -53.0, -50.5, -54.0, -51.5, -52.5])
 
-    def test_probe_codes_and_fixed_variables(self) -> None:
+    def test_probe_codes_and_fixed_columns(self) -> None:
         probes = build_probe_codes(self.previous_code)
         self.assertEqual(probes.shape, (6, 32))
-        self.assertTrue(np.all(probes[:, list(FIXED_VARIABLES)] == 0))
+        self.assertTrue(np.all(probes[:, list(FIXED_COLUMNS)] == 0))
         self.assertTrue(np.all(np.count_nonzero(probes != self.previous_code, axis=1) == 10))
 
     def test_input_has_128_values_and_no_angle(self) -> None:
@@ -60,10 +60,10 @@ class ProbeFeatureTest(unittest.TestCase):
         )
         np.testing.assert_allclose(original, shifted, atol=1e-7)
 
-    def test_restore_joint_code_keeps_reference_variables_zero(self) -> None:
-        joint = restore_joint_code(np.full(30, 3))
+    def test_restore_joint_column_code_keeps_reference_columns_zero(self) -> None:
+        joint = restore_joint_column_code(np.full(30, 3))
         self.assertEqual(joint.shape, (32,))
-        self.assertTrue(np.all(joint[list(FIXED_VARIABLES)] == 0))
+        self.assertTrue(np.all(joint[list(FIXED_COLUMNS)] == 0))
 
 
 class DatasetAndCSVTest(unittest.TestCase):
@@ -97,7 +97,7 @@ class DatasetAndCSVTest(unittest.TestCase):
             data = load_measured_csv(path)
         self.assertEqual(len(data), 1)
         self.assertEqual(data.features.shape, (1, 128))
-        np.testing.assert_array_equal(data.target_codes[0], target[FREE_VARIABLES])
+        np.testing.assert_array_equal(data.target_codes[0], target[FREE_COLUMNS])
 
 
 class ModelAndCETest(unittest.TestCase):

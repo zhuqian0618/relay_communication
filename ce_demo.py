@@ -13,10 +13,10 @@ from typing import Callable
 import numpy as np
 
 from model import (
-    FIXED_VARIABLES,
-    FREE_VARIABLES,
+    FIXED_COLUMNS,
+    FREE_COLUMNS,
     STATE_COUNT,
-    VARIABLE_COUNT,
+    COLUMN_COUNT,
     SimpleCodeNet,
     build_probe_codes,
     build_probe_features,
@@ -62,7 +62,7 @@ class CEResult:
 def normalize_probability(probability: np.ndarray) -> np.ndarray:
     probability = np.maximum(np.asarray(probability, dtype=float), MINIMUM_PROBABILITY)
     probability /= probability.sum(axis=1, keepdims=True)
-    probability[list(FIXED_VARIABLES)] = [1.0, 0.0, 0.0, 0.0]
+    probability[list(FIXED_COLUMNS)] = [1.0, 0.0, 0.0, 0.0]
     return probability
 
 
@@ -71,11 +71,11 @@ def sample_codes(
     count: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    Candidate_Coding_Matrices = np.empty((count, VARIABLE_COUNT), dtype=int)
-    for variable in range(VARIABLE_COUNT):
-        Candidate_Coding_Matrices[:, variable] = rng.choice(
-            STATE_COUNT, size=count, p=probability[variable])
-    Candidate_Coding_Matrices[:, list(FIXED_VARIABLES)] = 0
+    Candidate_Coding_Matrices = np.empty((count, COLUMN_COUNT), dtype=int)
+    for column_index in range(COLUMN_COUNT):
+        Candidate_Coding_Matrices[:, column_index] = rng.choice(
+            STATE_COUNT, size=count, p=probability[column_index])
+    Candidate_Coding_Matrices[:, list(FIXED_COLUMNS)] = 0
     return Candidate_Coding_Matrices
 
 
@@ -103,7 +103,7 @@ def coherent_transition_candidates(
     network_probability: np.ndarray,
     count: int = 3,
 ) -> np.ndarray:
-    """选出网络认为最可能的物理连续编码，避免独立变量被随意拼接。"""
+    """选出网络认为最可能的物理连续编码，避免各列状态被随意拼接。"""
 
     previous_code = validate_joint_code(previous_code)
     # 模板来自训练数据中出现过的完整编码变化，只包含30个离散状态差，
@@ -112,14 +112,14 @@ def coherent_transition_candidates(
     if unique_deltas.shape[0] == 0:
         return np.tile(previous_code, (count, 1))
     candidates = np.tile(previous_code, (unique_deltas.shape[0], 1))
-    candidates[:, FREE_VARIABLES] = (
-        candidates[:, FREE_VARIABLES] + unique_deltas
+    candidates[:, FREE_COLUMNS] = (
+        candidates[:, FREE_COLUMNS] + unique_deltas
     ) % STATE_COUNT
-    candidates[:, list(FIXED_VARIABLES)] = 0
+    candidates[:, list(FIXED_COLUMNS)] = 0
 
-    variable_indices = np.arange(VARIABLE_COUNT)[None, :]
+    column_indices = np.arange(COLUMN_COUNT)[None, :]
     log_probability = np.log(np.maximum(network_probability, 1e-8))
-    scores = np.sum(log_probability[variable_indices, candidates], axis=1)
+    scores = np.sum(log_probability[column_indices, candidates], axis=1)
     selected = np.argsort(scores)[-count:][::-1]
     return candidates[selected]
 
@@ -132,7 +132,7 @@ def finish_result(
 ) -> CEResult:
     codes = np.asarray(measured_codes, dtype=int)
     powers = np.asarray(measured_powers, dtype=float)
-    if codes.shape != (TOTAL_MEASUREMENTS, VARIABLE_COUNT):
+    if codes.shape != (TOTAL_MEASUREMENTS, COLUMN_COUNT):
         raise RuntimeError("CE must contain exactly 36 measured codes")
     if not np.any(np.isfinite(powers)):
         raise RuntimeError("all spectrum-analyzer readings are invalid")
@@ -158,7 +158,7 @@ def cold_start_ce(
 
     rng = np.random.default_rng(seed)
     probability = normalize_probability(
-        np.full((VARIABLE_COUNT, STATE_COUNT), 1.0 / STATE_COUNT)
+        np.full((COLUMN_COUNT, STATE_COUNT), 1.0 / STATE_COUNT)
     )
     measured_codes: list[np.ndarray] = []
     measured_powers: list[float] = []
@@ -243,9 +243,9 @@ def probe_assisted_ce(
         + uniform_weight / STATE_COUNT
     )
 
-    # 第9--12次：网络逐变量最大概率编码 + 三个物理连续候选。
+    # 第9--12次：网络逐列最大概率编码 + 三个物理连续候选。
     # 后三者把训练轨迹中可能出现的“整组编码变化”作为模板，可避免30个
-    # 变量独立采样后拼成一个方向图完全不连贯的编码。
+    # 各列独立采样后可能拼成方向图不连贯的编码。
     network_code = validate_joint_code(np.argmax(network_probability, axis=1))
     network_candidates = np.vstack(
         (network_code, coherent_transition_candidates(model, previous_code, network_probability, 3))

@@ -134,7 +134,7 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
         Coding_MS2 = snapshot["Coding_Matrix_MS2"]
         Probability_Letter, Phase_Letter, Pattern_Letter = Panel_Letters[column]
 
-        # 每列顶部：用3D柱状图展示32个联合变量选择四种2-bit相位状态的概率。
+        # 每列顶部：用3D柱状图展示32个联合可控列选择四种2-bit相位状态的概率。
         Probability_Axis = figure.add_subplot(grid[0, column], projection="3d")
         X = np.repeat(np.arange(1, 2 * Columns + 1), 4)
         Y = np.tile(np.arange(4), 2 * Columns)
@@ -143,9 +143,9 @@ def plot_ce_iteration_evolution(test_data: dict) -> None:
             X - 0.34, Y - 0.21, np.zeros_like(Heights), 0.68, 0.42, Heights,
             color=np.tile(Phase_State_Colors, 2 * Columns), edgecolor="#C9CED6",
             linewidth=0.25, shade=False, alpha=0.96)
-        # 放大三维坐标盒时，Matplotlib默认会按子图矩形裁掉边缘柱体；关闭柱体集合裁剪以完整显示首尾变量。
+        # 放大三维坐标盒时，Matplotlib默认会按子图矩形裁掉边缘柱体；关闭柱体集合裁剪以完整显示首尾列。
         Probability_Bars.set_clip_on(False)
-        # 三维坐标范围固定覆盖32个联合变量、4种相位状态和0至1的概率。
+        # 三维坐标范围固定覆盖32个联合可控列、4种相位状态和0至1的概率。
         Probability_Axis.set(xlim=(0.3, 32.7), ylim=(-0.4, 3.7), zlim=(0, 1.02),
                              xlabel="", ylabel="",
                              title=f"({Probability_Letter}) Iteration {iteration}: probability distribution\n"
