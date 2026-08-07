@@ -1,12 +1,12 @@
-"""频谱仪探针辅助编码网络。
+"""根据最近两次CE最佳编码预测下一次热启动概率的MLP。
 
 这个文件只放三类最基础的内容：
 
-1. 生成上一编码附近的六个固定探针编码；
-2. 把“上一编码 + 八次功率测量”整理成128维网络输入；
+1. 保存最近一次最佳编码；
+2. 计算最近两次最佳编码的状态变化；
 3. 定义一个普通的全连接神经网络（MLP）。
 
-实际在线调用不需要角度。角度只在仿真器生成训练数据时使用。
+网络输入不包含功率、角度或方向。频谱仪功率只负责2 dB触发和CE候选评价。
 """
 
 from __future__ import annotations
@@ -33,11 +33,8 @@ FREE_COLUMNS = np.asarray(
 )
 FREE_COLUMN_COUNT = FREE_COLUMNS.size
 
-PROBE_COUNT = 6
-POWER_CLIP_DB = 12.0
-REPEAT_CLIP_DB = 3.0
-NETWORK_INPUT_DIM = FREE_COLUMN_COUNT * STATE_COUNT + PROBE_COUNT + 2
-MODEL_FORMAT_VERSION = 3
+NETWORK_INPUT_DIM = 2 * FREE_COLUMN_COUNT * STATE_COUNT + 1
+MODEL_FORMAT_VERSION = 4
 
 
 # ============================== 2. 编码工具 ==============================
@@ -95,60 +92,26 @@ def reference_joint_code(angle_deg: float, state_offsets: np.ndarray | None = No
     return validate_joint_code(result)
 
 
-def build_probe_codes(previous_code: np.ndarray) -> np.ndarray:
-    """将可调列分成三组，生成“增加一级/减少一级”六个固定探针。"""
+# ============================== 3. 241维编码演化输入 ==============================
 
-    previous_code = validate_joint_code(previous_code)
-    probes = []
-    # 30个参与优化的列按0,1,2,0,1,2...轮流分为三组。
-    for group_index in range(3):
-        column_group = FREE_COLUMNS[np.arange(FREE_COLUMN_COUNT) % 3 == group_index]
-        for change in (+1, -1):
-            probe = previous_code.copy()
-            probe[column_group] = (probe[column_group] + change) % STATE_COUNT
-            probes.append(probe)
-    return np.asarray(probes, dtype=int)
-
-
-# ============================== 3. 128维输入 ==============================
-
-def build_probe_features(
-    previous_code: np.ndarray,
-    previous_best_power_dBm: float,
-    baseline_powers_dBm: np.ndarray,
-    probe_powers_dBm: np.ndarray,
+def build_code_history_features(
+    latest_best_code: np.ndarray,
+    previous_best_code: np.ndarray | None,
 ) -> np.ndarray:
-    """把已知编码和频谱仪读数转换成不含角度的128维输入。"""
+    """构造“当前编码one-hot + 编码变化one-hot + 历史有效标志”。"""
 
-    previous_code = validate_joint_code(previous_code)
-    baseline = np.asarray(baseline_powers_dBm, dtype=float).reshape(-1)
-    probes = np.asarray(probe_powers_dBm, dtype=float).reshape(-1)
-    if baseline.size != 2:
-        raise ValueError("exactly two baseline powers are required")
-    if probes.size != PROBE_COUNT:
-        raise ValueError(f"exactly {PROBE_COUNT} probe powers are required")
-    all_powers = np.concatenate(([float(previous_best_power_dBm)], baseline, probes))
-    if not np.all(np.isfinite(all_powers)):
-        raise ValueError("all spectrum-analyzer powers must be finite")
-
-    # 每个参与优化的列用四维one-hot表示，例如状态2写成[0, 0, 1, 0]。
-    previous_one_hot = np.eye(STATE_COUNT, dtype=np.float32)[previous_code[FREE_COLUMNS]].reshape(-1)
-    baseline_mean = float(np.mean(baseline))
-
-    # 相对功率消除了所有读数共同增加或减少所造成的影响。
-    relative_probe_power = np.clip(
-        probes - baseline_mean, -POWER_CLIP_DB, POWER_CLIP_DB
-    ) / POWER_CLIP_DB
-    movement_power_change = np.clip(
-        baseline_mean - float(previous_best_power_dBm), -POWER_CLIP_DB, POWER_CLIP_DB
-    ) / POWER_CLIP_DB
-    repeat_difference = np.clip(
-        abs(baseline[0] - baseline[1]), 0.0, REPEAT_CLIP_DB
-    ) / REPEAT_CLIP_DB
-
-    features = np.concatenate(
-        (previous_one_hot, relative_probe_power, [movement_power_change, repeat_difference])
-    ).astype(np.float32)
+    latest = validate_joint_code(latest_best_code)
+    if previous_best_code is None:
+        previous = latest
+        history_valid = 0.0
+    else:
+        previous = validate_joint_code(previous_best_code)
+        history_valid = 1.0
+    latest_free = latest[FREE_COLUMNS]
+    change = (latest_free - previous[FREE_COLUMNS]) % STATE_COUNT
+    latest_one_hot = np.eye(STATE_COUNT, dtype=np.float32)[latest_free].reshape(-1)
+    change_one_hot = np.eye(STATE_COUNT, dtype=np.float32)[change].reshape(-1)
+    features = np.concatenate((latest_one_hot, change_one_hot, [history_valid])).astype(np.float32)
     if features.shape != (NETWORK_INPUT_DIM,):
         raise RuntimeError(f"internal feature shape must be ({NETWORK_INPUT_DIM},)")
     return features
@@ -214,18 +177,16 @@ def make_simulated_measurement(
 # ============================== 5. MLP网络 ==============================
 
 class SimpleCodeNet(nn.Module):
-    """根据探针响应预测30个参与优化列的四状态概率。"""
+    """根据编码演化预测30个参与优化列的四状态概率。"""
 
     def __init__(self) -> None:
         super().__init__()
-        # 训练时保存出现过的完整编码变化模板。它不是网络输入，也不包含角度。
-        self.transition_deltas = np.empty((0, FREE_COLUMN_COUNT), dtype=int)
         self.model = nn.Sequential(
-            nn.Linear(NETWORK_INPUT_DIM, 256),
+            nn.Linear(NETWORK_INPUT_DIM, 128),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(256, FREE_COLUMN_COUNT * STATE_COUNT),
+            nn.Linear(64, FREE_COLUMN_COUNT * STATE_COUNT),
         )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
@@ -261,7 +222,6 @@ def save_model(model: SimpleCodeNet, path: str | Path) -> None:
             "format_version": MODEL_FORMAT_VERSION,
             "network_input_dim": NETWORK_INPUT_DIM,
             "model_state": model.state_dict(),
-            "transition_deltas": torch.as_tensor(model.transition_deltas, dtype=torch.long),
         },
         Path(path),
     )
@@ -273,13 +233,9 @@ def load_model(path: str | Path, device: str | None = None) -> SimpleCodeNet:
     device_object = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     checkpoint = torch.load(Path(path), map_location=device_object, weights_only=True)
     if checkpoint.get("format_version") != MODEL_FORMAT_VERSION:
-        raise ValueError("model format is outdated; run train.py to train the probe-input model")
+        raise ValueError("model format is outdated; run train.py to train the code-history model")
     model = SimpleCodeNet().to(device_object)
     model.load_state_dict(checkpoint["model_state"])
-    saved_deltas = checkpoint.get(
-        "transition_deltas", torch.empty((0, FREE_COLUMN_COUNT), dtype=torch.long)
-    )
-    model.transition_deltas = saved_deltas.cpu().numpy().astype(int).reshape(-1, FREE_COLUMN_COUNT)
     model.eval()
     return model
 
